@@ -38,7 +38,7 @@ def init_db():
             id TEXT PRIMARY KEY,
             title TEXT DEFAULT '',
             keywords TEXT DEFAULT '',
-            priority INTEGER DEFAULT 10,
+            entry_type TEXT DEFAULT 'specific',
             symptom TEXT DEFAULT '',
             symptom_id TEXT DEFAULT '',
             alertname_pattern TEXT DEFAULT '',
@@ -55,7 +55,7 @@ def init_db():
     """)
     # 兼容旧数据库：新增列不存在时添加
     for col, typ in [('keywords', "TEXT DEFAULT ''"), ('priority', 'INTEGER DEFAULT 10'),
-                     ('symptom', "TEXT DEFAULT ''"), ('symptom_id', "TEXT DEFAULT ''")]:
+                     ('symptom', "TEXT DEFAULT ''"), ('symptom_id', "TEXT DEFAULT ''"), ('entry_type', "TEXT DEFAULT 'specific'")]:
         try:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
@@ -80,7 +80,7 @@ def migrate_json(conn):
         keywords = e.get('keywords', [])
         conn.execute("""
             INSERT OR IGNORE INTO entries
-            (id, title, keywords, priority, symptom, symptom_id,
+            (id, title, keywords, entry_type, symptom, symptom_id,
              alertname_pattern, message_pattern, exclude_pattern,
              root_cause, root_cause_id, recovery_action, note, created_at, hit_count)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -88,7 +88,7 @@ def migrate_json(conn):
             e['id'],
             e.get('title', ''),
             json.dumps(keywords, ensure_ascii=False) if keywords else '',
-            e.get('priority', 10),
+            e.get('type', 'specific'),
             e.get('symptom', ''),
             e.get('symptom_id', ''),
             mid.get('alertname', e.get('alert_pattern', '')),
@@ -128,7 +128,7 @@ def api_list(conn, params):
     sort = params.get('sort', ['id'])[0].strip()
     order = 'DESC' if sort.startswith('-') else 'ASC'
     sort = sort.lstrip('-')
-    allowed = {'id','hit_count','created_at','title','root_cause_id','priority','symptom_id'}
+    allowed = {'id','hit_count','created_at','title','root_cause_id','entry_type','symptom_id'}
     if sort not in allowed:
         sort = 'id'
 
@@ -159,14 +159,14 @@ def api_add(conn, data):
     keywords = data.get('keywords', [])
     conn.execute("""
         INSERT INTO entries
-        (id, title, keywords, priority, alertname_pattern, message_pattern, exclude_pattern,
+        (id, title, keywords, entry_type, alertname_pattern, message_pattern, exclude_pattern,
          root_cause, root_cause_id, recovery_action, note, created_at, updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         nid,
         data.get('title', ''),
         json.dumps(keywords, ensure_ascii=False) if keywords else '',
-        int(data.get('priority', 10)),
+        data.get('type', 'specific'),
         data.get('alertname_pattern', ''),
         data.get('message_pattern', ''),
         data.get('exclude_pattern', 'resolved|recover|ok|test|fake'),
@@ -184,7 +184,7 @@ def api_update(conn, eid, data):
     now = datetime.now(TZ).isoformat()
     fields = []
     args = []
-    for k in ('title','keywords','priority','symptom','symptom_id',
+    for k in ('title','keywords','entry_type','symptom','symptom_id',
               'alertname_pattern','message_pattern','exclude_pattern',
               'root_cause','root_cause_id','recovery_action','note'):
         if k in data:
@@ -317,7 +317,6 @@ tr:hover{background:#f8f9ff}
 .badge-4{background:#e0f0ff;color:#06c}
 .badge-5{background:#e8f5e9;color:#2a6}
 .tag{display:inline-block;padding:2px 7px;margin:1px 2px;border-radius:4px;font-size:11px;background:#f0f0f0;color:#555;border:1px solid #e0e0e0}
-.priority-high{color:#c00;font-weight:600}
 #graph{width:100%;height:600px;border:1px solid #eee;border-radius:6px}
 .detail-panel{position:fixed;top:0;right:-500px;width:480px;height:100%;background:#fff;box-shadow:-2px 0 20px rgba(0,0,0,.15);transition:right .3s;z-index:100;overflow-y:auto;padding:20px}
 .detail-panel.open{right:0}
@@ -333,7 +332,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
 </head>
 <body>
 <div class="container">
-<h1>故障知识库 <small>关键词评分匹配</small></h1>
+<h1>故障知识库 <small>specific / catchall</small></h1>
 <div class="bar">
   <input type="text" id="search" placeholder="搜索标题、根因、关键词..." oninput="loadData()">
   <select id="symFilter" onchange="loadData()">
@@ -346,7 +345,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
   <select id="sort" onchange="loadData()">
     <option value="id">编号排序</option>
     <option value="-hit_count">命中最多</option>
-    <option value="-priority">优先级高</option>
+    <option value="">类型</option>
     <option value="-created_at">最近添加</option>
   </select>
   <div class="stats" id="stats"></div>
@@ -362,7 +361,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
       <th>症状</th>
       <th onclick="sortBy('id')">#</th>
       <th>告警 / 根因</th>
-      <th onclick="sortBy('priority')">优先级</th>
+      <th>类型</th>
       <th onclick="sortBy('hit_count')">命中</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
@@ -429,7 +428,7 @@ function renderTable() {
       var rcLabel = e.root_cause ? e.root_cause.slice(0, 35) : '—';
       tr.innerHTML += '<td><b>#'+e.id+'</b></td>' +
         '<td><b>'+esc(e.title)+'</b><br/><span style="color:#888;font-size:11px">'+esc(rcLabel)+'</span></td>' +
-        '<td>'+(e.priority >= 10 ? '<b class="priority-high">'+e.priority+'</b>' : e.priority)+'</td>' +
+        '<td>'+(e.type === 'catchall' ? '<span style="color:#999">catchall</span>' : '<span style="color:#2a6">specific</span>')+'</td>' +
         '<td>'+e.hit_count+'</td>';
       tbody.appendChild(tr);
     });
@@ -444,7 +443,7 @@ function showDetail(id) {
     panel.querySelector('#detailContent').innerHTML =
       '<h2>#'+e.id+' '+esc(e.title)+'</h2>' +
       '<div class="field"><label>症状分类</label><div class="val"><b>'+esc(e.symptom||'—')+'</b></div></div>' +
-      '<div class="field"><label>优先级</label><div class="val"><b>'+e.priority+'</b></div></div>' +
+      '<div class="field"><label>类型</label><div class="val"><b>'+(e.type||'specific')+'</b></div></div>' +
       '<div class="field"><label>根因</label><div class="val">'+esc(e.root_cause||'')+'</div></div>' +
       '<div class="field"><label>关键词</label><div class="val">'+(kws||'<span style="color:#999">未设置</span>')+'</div></div>' +
       '<div class="field"><label>恢复步骤</label><div class="val"><pre>'+esc(e.recovery_action||'无')+'</pre></div></div>' +

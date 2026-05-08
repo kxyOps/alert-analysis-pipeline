@@ -84,7 +84,7 @@ def add(alert_msg, root_cause_id, note='', keywords=None):
         'id': next_id(data),
         'title': alert_msg[:80],
         'keywords': keywords,
-        'priority': 10,
+        'type': 'specific',
         'match': {
             'exclude': 'resolved|recover|ok|test|fake'
         },
@@ -169,7 +169,7 @@ def _match_all(fields):
         if not match:
             old_pattern = e.get('alert_pattern', '')
             if old_pattern and msg_text and re.search(old_pattern, msg_text, re.IGNORECASE):
-                scored.append((1.0, e.get('priority', 0), e))
+                scored.append((1.0, e))
             continue
 
         # ── 排除规则（词边界匹配） ──
@@ -194,7 +194,6 @@ def _match_all(fields):
 
         # ── 关键词评分 ──
         keywords = e.get('keywords', [])
-        priority = e.get('priority', 0)
 
         if keywords and msg_text:
             matched_kws = [kw for kw in keywords if kw.lower() in msg_text]
@@ -202,22 +201,26 @@ def _match_all(fields):
                 score = len(matched_kws) / len(keywords)
                 e['_matched_keywords'] = matched_kws
                 e['_score'] = round(score, 3)
-                scored.append((score, priority, e))
+                scored.append((score, e))
                 continue
 
         # ── 无关键词 → 用 message 正则保底 ──
         msg_pat = match.get('message', '')
         if not keywords and msg_pat and msg_text:
             if re.search(msg_pat, msg_text, re.IGNORECASE):
-                scored.append((0.5, priority, e))
+                scored.append((0.5, e))
                 continue
 
     if not scored:
         return None
 
-    # 按评分降序 → 优先级降序 → id 升序
-    scored.sort(key=lambda x: (-x[0], -x[1], x[2].get('id', '')))
-    best = scored[0][2]
+    # 按评分降序 → specific 优先于 catchall → id 升序
+    scored.sort(key=lambda x: (
+        -x[0],
+        0 if x[1].get('type', 'specific') == 'specific' else 1,
+        x[1].get('id', '')
+    ))
+    best = scored[0][1]
 
     # 更新命中次数
     best['hit_count'] = best.get('hit_count', 0) + 1
@@ -245,19 +248,20 @@ def _build_result(e):
 
 def list_entries():
     data = load()
+    current_sym = None
     for e in data['entries']:
-        m = e.get('match', {})
+        sym = e.get('symptom', '')
+        if sym != current_sym:
+            current_sym = sym
+            print(f"── {sym} ─{'─' * (40 - len(sym))}")
         kws = e.get('keywords', [])
         priority = e.get('priority', 0)
-        an = m.get('alertname', e.get('alert_pattern', '—'))[:40]
         c = e.get('created_at', '')
-        print(f"#{e['id']}  {e.get('title','')[:60]}  [p={priority}]")
+        print(f"  #{e['id']}  {e.get('title','')[:60]}  [{e.get('type','specific')}]")
         if kws:
-            print(f"    关键词: {', '.join(kws[:8])}{'...' if len(kws) > 8 else ''}")
-        else:
-            print(f"    匹配 alertname: {an}")
-        print(f"    根因: {e.get('root_cause','')[:60]}")
-        print(f"    命中: {e.get('hit_count',0)}次  创建: {c[:16] if c else '未记录'}")
+            print(f"      关键词: {', '.join(kws[:8])}{'...' if len(kws) > 8 else ''}")
+        print(f"      根因: {e.get('root_cause','')[:60]}")
+        print(f"      命中: {e.get('hit_count',0)}次")
         print()
 
 
