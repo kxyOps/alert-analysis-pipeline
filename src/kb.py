@@ -78,7 +78,7 @@ def _extract_keywords(text):
     return result[:15]  # 最多15个关键词
 
 
-def add(alert_msg, root_cause_id, note='', keywords=None):
+def add(alert_msg, root_cause_id, note='', keywords=None, symptom='', symptom_id='', entry_type='specific'):
     """新增故障记录"""
     data = load()
     keywords = keywords or _extract_keywords(alert_msg)
@@ -86,7 +86,9 @@ def add(alert_msg, root_cause_id, note='', keywords=None):
         'id': next_id(data),
         'title': alert_msg[:80],
         'keywords': keywords,
-        'type': 'specific',
+        'type': entry_type,
+        'symptom': symptom,
+        'symptom_id': symptom_id,
         'match': {
             'exclude': 'resolved|recover|ok|test|fake'
         },
@@ -320,14 +322,42 @@ if __name__ == '__main__':
 
     cmd = sys.argv[1]
 
-    if cmd == 'list':
+    if cmd in ('list', '--help', '-h'):
+        if cmd != 'list':
+            print("用法: kb.py <list|add|delete|edit|match|cleanup> [...]")
+            print()
+            print("  list                         列出所有条目（按症状分组）")
+            print("  add <消息> <根因ID> [备注]   新增记录（自动提取关键词）")
+            print("       [--symptom S] [--symptom-id SID] [--type specific|catchall]")
+            print("  delete <id>                  删除条目")
+            print("  edit <id> [字段...]           修改条目字段")
+            print("  match <消息>                 纯文本匹配")
+            print("  match --json '<JSON>'         告警 payload 匹配")
+            print("  cleanup                      清理超量记录")
+            sys.exit(0)
         list_entries()
 
     elif cmd == 'add':
         if len(sys.argv) < 4:
-            print("用法: kb.py add <告警消息> <根因ID> [备注]")
+            print("用法: kb.py add <消息> <根因ID> [备注] [--symptom S] [--symptom-id SID] [--type specific|catchall]")
             sys.exit(1)
-        aid = add(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else '')
+        msg = sys.argv[2]
+        rc_id = sys.argv[3]
+        note = ''
+        symptom = ''
+        symptom_id = ''
+        entry_type = 'specific'
+        i = 4
+        while i < len(sys.argv):
+            if sys.argv[i] == '--symptom' and i + 1 < len(sys.argv):
+                symptom = sys.argv[i + 1]; i += 2
+            elif sys.argv[i] == '--symptom-id' and i + 1 < len(sys.argv):
+                symptom_id = sys.argv[i + 1]; i += 2
+            elif sys.argv[i] == '--type' and i + 1 < len(sys.argv):
+                entry_type = sys.argv[i + 1]; i += 2
+            else:
+                note = sys.argv[i]; i += 1
+        aid = add(msg, rc_id, note=note, symptom=symptom, symptom_id=symptom_id, entry_type=entry_type)
         print(f"KB_WRITTEN {aid}")
 
     elif cmd == 'delete':
