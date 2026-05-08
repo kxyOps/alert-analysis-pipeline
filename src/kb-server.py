@@ -39,6 +39,8 @@ def init_db():
             title TEXT DEFAULT '',
             keywords TEXT DEFAULT '',
             priority INTEGER DEFAULT 10,
+            symptom TEXT DEFAULT '',
+            symptom_id TEXT DEFAULT '',
             alertname_pattern TEXT DEFAULT '',
             message_pattern TEXT DEFAULT '',
             exclude_pattern TEXT DEFAULT 'resolved|recover|ok|test|fake',
@@ -52,7 +54,8 @@ def init_db():
         )
     """)
     # 兼容旧数据库：新增列不存在时添加
-    for col, typ in [('keywords', 'TEXT DEFAULT \'\''), ('priority', 'INTEGER DEFAULT 10')]:
+    for col, typ in [('keywords', "TEXT DEFAULT ''"), ('priority', 'INTEGER DEFAULT 10'),
+                     ('symptom', "TEXT DEFAULT ''"), ('symptom_id', "TEXT DEFAULT ''")]:
         try:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError:
@@ -77,14 +80,17 @@ def migrate_json(conn):
         keywords = e.get('keywords', [])
         conn.execute("""
             INSERT OR IGNORE INTO entries
-            (id, title, keywords, priority, alertname_pattern, message_pattern, exclude_pattern,
+            (id, title, keywords, priority, symptom, symptom_id,
+             alertname_pattern, message_pattern, exclude_pattern,
              root_cause, root_cause_id, recovery_action, note, created_at, hit_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             e['id'],
             e.get('title', ''),
             json.dumps(keywords, ensure_ascii=False) if keywords else '',
             e.get('priority', 10),
+            e.get('symptom', ''),
+            e.get('symptom_id', ''),
             mid.get('alertname', e.get('alert_pattern', '')),
             mid.get('message', ''),
             mid.get('exclude', 'resolved|recover|ok|test|fake'),
@@ -122,7 +128,7 @@ def api_list(conn, params):
     sort = params.get('sort', ['id'])[0].strip()
     order = 'DESC' if sort.startswith('-') else 'ASC'
     sort = sort.lstrip('-')
-    allowed = {'id','hit_count','created_at','title','root_cause_id','priority'}
+    allowed = {'id','hit_count','created_at','title','root_cause_id','priority','symptom_id'}
     if sort not in allowed:
         sort = 'id'
 
@@ -178,7 +184,8 @@ def api_update(conn, eid, data):
     now = datetime.now(TZ).isoformat()
     fields = []
     args = []
-    for k in ('title','keywords','priority','alertname_pattern','message_pattern','exclude_pattern',
+    for k in ('title','keywords','priority','symptom','symptom_id',
+              'alertname_pattern','message_pattern','exclude_pattern',
               'root_cause','root_cause_id','recovery_action','note'):
         if k in data:
             v = data[k]
@@ -209,31 +216,69 @@ def api_stats(conn):
         'top_hits': [dict(r) for r in top],
         'by_root_cause': [dict(r) for r in by_rc],
     }
+def api_symptoms(conn, params):
+    """返回按症状分组的数据"""
+    sym = params.get('sym', [''])[0].strip()
+    q = params.get('q', [''])[0].strip()
+    sql = "SELECT * FROM entries WHERE 1=1"
+    args = []
+    if sym:
+        sql += " AND symptom_id=?"
+        args.append(sym)
+    if q:
+        sql += " AND (title LIKE ? OR root_cause LIKE ? OR keywords LIKE ?)"
+        like = f'%{q}%'
+        args.extend([like, like, like])
+    sql += " ORDER BY symptom_id, id"
+    rows = conn.execute(sql, args).fetchall()
+    groups = {}
+    for r in rows:
+        r = _row_to_dict(r)
+        sid = r.get('symptom_id') or 'other'
+        if sid not in groups:
+            groups[sid] = {
+                'symptom_id': sid,
+                'symptom': r.get('symptom') or '其他',
+                'entries': []
+            }
+        groups[sid]['entries'].append(r)
+    return list(groups.values())
+
 
 def api_graph(conn):
-    rows = conn.execute("SELECT id, title, root_cause_id, root_cause, hit_count FROM entries").fetchall()
+    """三层图谱：症状 → 条目"""
+    rows = conn.execute("SELECT * FROM entries ORDER BY symptom_id, id").fetchall()
     nodes = []
     edges = []
-    seen_rc = set()
+    seen_symptom = set()
     for r in rows:
+        sym_id = r['symptom_id'] or 'other'
+        sym_name = r['symptom'] or '其他'
+        if sym_id not in seen_symptom:
+            seen_symptom.add(sym_id)
+            nodes.append({
+                'id': f"sym_{sym_id}",
+                'label': sym_name[:20],
+                'title': sym_name,
+                'group': 'symptom',
+                'value': 15,
+                'shape': 'hexagon',
+            })
+        entry_node_id = f"fault_{r['id']}"
         nodes.append({
-            'id': f"fault_{r['id']}",
-            'label': f"#{r['id']} {r['title'][:30]}",
-            'title': f"#{r['id']}: {r['title']}<br/>命中 {r['hit_count']} 次",
+            'id': entry_node_id,
+            'label': f"#{r['id']} {r['title'][:20]}",
+            'title': f"#{r['id']}: {r['title']}<br/>命中 {r['hit_count']} 次<br/>{r['root_cause'][:40]}",
             'group': 'fault',
             'value': max(5, r['hit_count'] + 5),
         })
-        rc_key = f"rc_{r['root_cause_id']}"
-        if rc_key not in seen_rc:
-            seen_rc.add(rc_key)
-            nodes.append({
-                'id': rc_key,
-                'label': f"根因 #{r['root_cause_id']}: {r['root_cause'][:30]}",
-                'title': r['root_cause'],
-                'group': 'root_cause',
-                'value': 10,
-            })
-        edges.append({'from': f"fault_{r['id']}", 'to': rc_key, 'label': '根因'})
+        edges.append({
+            'from': f"sym_{sym_id}",
+            'to': entry_node_id,
+            'label': r['root_cause'][:15],
+            'arrows': 'to',
+            'font': {'size': 10},
+        })
     return {'nodes': nodes, 'edges': edges}
 
 # ── HTML 前端 ─────────────────────────────────────────────
@@ -291,13 +336,12 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
 <h1>故障知识库 <small>关键词评分匹配</small></h1>
 <div class="bar">
   <input type="text" id="search" placeholder="搜索标题、根因、关键词..." oninput="loadData()">
-  <select id="rcFilter" onchange="loadData()">
-    <option value="">全部根因</option>
-    <option value="1">1-内存超限</option>
-    <option value="2">2-连接失败</option>
-    <option value="3">3-进程宕机</option>
-    <option value="4">4-磁盘空间</option>
-    <option value="5">5-慢查询</option>
+  <select id="symFilter" onchange="loadData()">
+    <option value="">全部症状</option>
+    <option value="mem_high">内存使用率高</option>
+    <option value="svc_down">服务不可用</option>
+    <option value="disk_full">存储空间不足</option>
+    <option value="query_slow">查询延迟</option>
   </select>
   <select id="sort" onchange="loadData()">
     <option value="id">编号排序</option>
@@ -315,12 +359,11 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
   <div id="loading" class="loading">加载中...</div>
   <table id="table" style="display:none">
     <thead><tr>
+      <th>症状</th>
       <th onclick="sortBy('id')">#</th>
-      <th onclick="sortBy('title')">标题</th>
-      <th onclick="sortBy('root_cause_id')">根因</th>
+      <th>告警 / 根因</th>
       <th onclick="sortBy('priority')">优先级</th>
       <th onclick="sortBy('hit_count')">命中</th>
-      <th onclick="sortBy('created_at')">记录时间</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -348,9 +391,11 @@ function switchTab(name) {
 
 function loadData() {
   var q = document.getElementById('search').value;
-  var rc = document.getElementById('rcFilter').value;
+  var sym = document.getElementById('symFilter').value;
   var sort = document.getElementById('sort').value;
-  var url = '/api/entries?q='+encodeURIComponent(q)+'&rc='+rc+'&sort='+sort;
+  var url = '/api/symptoms';
+  if (sym) url += '?sym=' + sym;
+  if (q) url += (sym ? '&' : '?') + 'q=' + encodeURIComponent(q);
   fetch(url).then(r=>r.json()).then(data => {
     allData = data;
     document.getElementById('loading').style.display = 'none';
@@ -362,33 +407,45 @@ function loadData() {
 function renderTable() {
   var tbody = document.getElementById('tbody');
   tbody.innerHTML = '';
-  allData.forEach(e => {
-    var tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
-    tr.onclick = function(){ showDetail(e.id); };
-    var rcNames = {1:'内存超限',2:'连接失败',3:'进程宕机',4:'磁盘空间',5:'慢查询'};
-    var rcName = rcNames[e.root_cause_id] || '其他';
-    var prioCls = e.priority >= 10 ? 'priority-high' : '';
-    tr.innerHTML = '<td><b>#'+e.id+'</b></td>' +
-      '<td>'+esc(e.title)+'</td>' +
-      '<td><span class="badge badge-'+e.root_cause_id+'">'+rcName+'</span></td>' +
-      '<td class="'+prioCls+'">'+e.priority+'</td>' +
-      '<td>'+e.hit_count+'</td>' +
-      '<td>'+(e.created_at||'').slice(0,10)+'</td>';
-    tbody.appendChild(tr);
+  var total = 0;
+  allData.forEach(function(g) {
+    var entries = g.entries;
+    var rowspan = entries.length;
+    total += entries.length;
+    entries.forEach(function(e, i) {
+      var tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      tr.onclick = function(){ showDetail(e.id); };
+      // 症状合并单元格
+      if (i === 0) {
+        var symTd = document.createElement('td');
+        symTd.setAttribute('rowspan', rowspan);
+        symTd.style.background = '#f8f9ff';
+        symTd.style.fontWeight = '600';
+        symTd.style.width = '120px';
+        symTd.textContent = g.symptom;
+        tr.appendChild(symTd);
+      }
+      var rcLabel = e.root_cause ? e.root_cause.slice(0, 35) : '—';
+      tr.innerHTML += '<td><b>#'+e.id+'</b></td>' +
+        '<td><b>'+esc(e.title)+'</b><br/><span style="color:#888;font-size:11px">'+esc(rcLabel)+'</span></td>' +
+        '<td>'+(e.priority >= 10 ? '<b class="priority-high">'+e.priority+'</b>' : e.priority)+'</td>' +
+        '<td>'+e.hit_count+'</td>';
+      tbody.appendChild(tr);
+    });
   });
-  document.getElementById('stats').textContent = '共 '+allData.length+' 条';
+  document.getElementById('stats').textContent = '共 '+total+' 条';
 }
 
 function showDetail(id) {
   fetch('/api/entries/'+id).then(r=>r.json()).then(e => {
     var panel = document.getElementById('detail');
-    var rcNames = {1:'内存超限',2:'连接失败',3:'进程宕机',4:'磁盘空间',5:'慢查询'};
     var kws = (e.keywords||[]).map(function(k){ return '<span class="tag">'+esc(k)+'</span>'; }).join('');
     panel.querySelector('#detailContent').innerHTML =
       '<h2>#'+e.id+' '+esc(e.title)+'</h2>' +
+      '<div class="field"><label>症状分类</label><div class="val"><b>'+esc(e.symptom||'—')+'</b></div></div>' +
       '<div class="field"><label>优先级</label><div class="val"><b>'+e.priority+'</b></div></div>' +
-      '<div class="field"><label>根因</label><div class="val">'+(rcNames[e.root_cause_id]||'')+' — '+esc(e.root_cause||'')+'</div></div>' +
+      '<div class="field"><label>根因</label><div class="val">'+esc(e.root_cause||'')+'</div></div>' +
       '<div class="field"><label>关键词</label><div class="val">'+(kws||'<span style="color:#999">未设置</span>')+'</div></div>' +
       '<div class="field"><label>恢复步骤</label><div class="val"><pre>'+esc(e.recovery_action||'无')+'</pre></div></div>' +
       '<div class="field"><label>匹配 alertname</label><div class="val">'+esc(e.alertname_pattern||'—')+'</div></div>' +
@@ -414,6 +471,7 @@ function loadGraph() {
       nodes: {shape:'dot',size:12,font:{size:14,face:'Arial'},borderWidth:2},
       edges: {arrows:'to',smooth:true,font:{size:11}},
       groups: {
+        symptom: {color:{background:'#6c5ce7',border:'#4a3ba8'},shape:'hexagon',font:{size:15,weight:'bold'}},
         fault: {color:{background:'#4a90d9',border:'#2a5fa8'}},
         root_cause: {color:{background:'#e8a838',border:'#b87a18'}},
       },
@@ -466,6 +524,8 @@ class KBHandler(BaseHTTPRequestHandler):
                     self.send_json({'error':'not found'}, 404)
             elif path == '/api/stats':
                 self.send_json(api_stats(self.conn))
+            elif path == '/api/symptoms':
+                self.send_json(api_symptoms(self.conn, params))
             elif path == '/api/graph':
                 self.send_json(api_graph(self.conn))
             else:
