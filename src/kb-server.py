@@ -37,6 +37,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS entries (
             id TEXT PRIMARY KEY,
             title TEXT DEFAULT '',
+            keywords TEXT DEFAULT '',
+            priority INTEGER DEFAULT 10,
             alertname_pattern TEXT DEFAULT '',
             message_pattern TEXT DEFAULT '',
             exclude_pattern TEXT DEFAULT 'resolved|recover|ok|test|fake',
@@ -49,6 +51,12 @@ def init_db():
             hit_count INTEGER DEFAULT 0
         )
     """)
+    # 兼容旧数据库：新增列不存在时添加
+    for col, typ in [('keywords', 'TEXT DEFAULT \'\''), ('priority', 'INTEGER DEFAULT 10')]:
+        try:
+            conn.execute(f"ALTER TABLE entries ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError:
+            pass  # 已存在
     conn.commit()
     return conn
 
@@ -66,14 +74,17 @@ def migrate_json(conn):
         existing = conn.execute("SELECT id FROM entries WHERE id=?", (e['id'],)).fetchone()
         if existing:
             continue
+        keywords = e.get('keywords', [])
         conn.execute("""
             INSERT OR IGNORE INTO entries
-            (id, title, alertname_pattern, message_pattern, exclude_pattern,
+            (id, title, keywords, priority, alertname_pattern, message_pattern, exclude_pattern,
              root_cause, root_cause_id, recovery_action, note, created_at, hit_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             e['id'],
             e.get('title', ''),
+            json.dumps(keywords, ensure_ascii=False) if keywords else '',
+            e.get('priority', 10),
             mid.get('alertname', e.get('alert_pattern', '')),
             mid.get('message', ''),
             mid.get('exclude', 'resolved|recover|ok|test|fake'),
@@ -88,34 +99,50 @@ def migrate_json(conn):
     conn.commit()
     return count > 0
 
+# ── 辅助: 解析 keywords ──────────────────────────────────
+def _parse_keywords(val):
+    if not val:
+        return []
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return val if isinstance(val, list) else []
+
 # ── API 处理 ──────────────────────────────────────────────
+def _row_to_dict(r):
+    d = dict(r)
+    d['keywords'] = _parse_keywords(d.get('keywords', ''))
+    return d
+
 def api_list(conn, params):
     q = params.get('q', [''])[0].strip()
     rc = params.get('rc', [''])[0].strip()
     sort = params.get('sort', ['id'])[0].strip()
     order = 'DESC' if sort.startswith('-') else 'ASC'
     sort = sort.lstrip('-')
-    allowed = {'id','hit_count','created_at','title','root_cause_id'}
+    allowed = {'id','hit_count','created_at','title','root_cause_id','priority'}
     if sort not in allowed:
         sort = 'id'
 
     sql = "SELECT * FROM entries WHERE 1=1"
     args = []
     if q:
-        sql += " AND (title LIKE ? OR root_cause LIKE ? OR recovery_action LIKE ?)"
+        sql += " AND (title LIKE ? OR root_cause LIKE ? OR recovery_action LIKE ? OR keywords LIKE ?)"
         like = f'%{q}%'
-        args.extend([like, like, like])
+        args.extend([like, like, like, like])
     if rc:
         sql += " AND root_cause_id=?"
         args.append(int(rc))
 
     sql += f" ORDER BY {sort} {order}"
     rows = conn.execute(sql, args).fetchall()
-    return [dict(r) for r in rows]
+    return [_row_to_dict(r) for r in rows]
 
 def api_get(conn, eid):
     r = conn.execute("SELECT * FROM entries WHERE id=?", (eid,)).fetchone()
-    return dict(r) if r else None
+    return _row_to_dict(r) if r else None
 
 def api_add(conn, data):
     now = datetime.now(TZ).isoformat()
@@ -123,14 +150,17 @@ def api_add(conn, data):
     if not nid:
         last = conn.execute("SELECT id FROM entries ORDER BY id DESC LIMIT 1").fetchone()
         nid = str(int(last['id']) + 1).zfill(3) if last else '001'
+    keywords = data.get('keywords', [])
     conn.execute("""
         INSERT INTO entries
-        (id, title, alertname_pattern, message_pattern, exclude_pattern,
+        (id, title, keywords, priority, alertname_pattern, message_pattern, exclude_pattern,
          root_cause, root_cause_id, recovery_action, note, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         nid,
         data.get('title', ''),
+        json.dumps(keywords, ensure_ascii=False) if keywords else '',
+        int(data.get('priority', 10)),
         data.get('alertname_pattern', ''),
         data.get('message_pattern', ''),
         data.get('exclude_pattern', 'resolved|recover|ok|test|fake'),
@@ -148,11 +178,14 @@ def api_update(conn, eid, data):
     now = datetime.now(TZ).isoformat()
     fields = []
     args = []
-    for k in ('title','alertname_pattern','message_pattern','exclude_pattern',
+    for k in ('title','keywords','priority','alertname_pattern','message_pattern','exclude_pattern',
               'root_cause','root_cause_id','recovery_action','note'):
         if k in data:
+            v = data[k]
+            if k == 'keywords' and isinstance(v, list):
+                v = json.dumps(v, ensure_ascii=False)
             fields.append(f"{k}=?")
-            args.append(data[k])
+            args.append(v)
     if not fields:
         return False
     fields.append("updated_at=?")
@@ -178,7 +211,6 @@ def api_stats(conn):
     }
 
 def api_graph(conn):
-    """返回 vis.js 可用的 nodes + edges"""
     rows = conn.execute("SELECT id, title, root_cause_id, root_cause, hit_count FROM entries").fetchall()
     nodes = []
     edges = []
@@ -218,6 +250,7 @@ HTML = r"""<!DOCTYPE html>
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f5;color:#333;padding:20px}
 .container{max-width:1200px;margin:0 auto}
 h1{font-size:22px;margin-bottom:12px;color:#1a1a1a}
+h1 small{font-size:13px;color:#999;font-weight:400;margin-left:8px}
 .bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .bar input{padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;flex:1;min-width:200px}
 .bar select{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px}
@@ -229,7 +262,7 @@ h1{font-size:22px;margin-bottom:12px;color:#1a1a1a}
 .panel.active{display:block}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eee}
-th{background:#fafafa;font-weight:600;cursor:pointer;white-space:nowrap}
+th{background:#fafafa;font-weight:600;cursor:pointer;white-space:nowrap;user-select:none}
 th:hover{background:#f0f0f0}
 tr:hover{background:#f8f9ff}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
@@ -238,6 +271,8 @@ tr:hover{background:#f8f9ff}
 .badge-3{background:#fee;color:#a00}
 .badge-4{background:#e0f0ff;color:#06c}
 .badge-5{background:#e8f5e9;color:#2a6}
+.tag{display:inline-block;padding:2px 7px;margin:1px 2px;border-radius:4px;font-size:11px;background:#f0f0f0;color:#555;border:1px solid #e0e0e0}
+.priority-high{color:#c00;font-weight:600}
 #graph{width:100%;height:600px;border:1px solid #eee;border-radius:6px}
 .detail-panel{position:fixed;top:0;right:-500px;width:480px;height:100%;background:#fff;box-shadow:-2px 0 20px rgba(0,0,0,.15);transition:right .3s;z-index:100;overflow-y:auto;padding:20px}
 .detail-panel.open{right:0}
@@ -253,9 +288,9 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
 </head>
 <body>
 <div class="container">
-<h1>故障知识库</h1>
+<h1>故障知识库 <small>关键词评分匹配</small></h1>
 <div class="bar">
-  <input type="text" id="search" placeholder="搜索标题、根因、恢复步骤..." oninput="loadData()">
+  <input type="text" id="search" placeholder="搜索标题、根因、关键词..." oninput="loadData()">
   <select id="rcFilter" onchange="loadData()">
     <option value="">全部根因</option>
     <option value="1">1-内存超限</option>
@@ -267,6 +302,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
   <select id="sort" onchange="loadData()">
     <option value="id">编号排序</option>
     <option value="-hit_count">命中最多</option>
+    <option value="-priority">优先级高</option>
     <option value="-created_at">最近添加</option>
   </select>
   <div class="stats" id="stats"></div>
@@ -282,6 +318,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
       <th onclick="sortBy('id')">#</th>
       <th onclick="sortBy('title')">标题</th>
       <th onclick="sortBy('root_cause_id')">根因</th>
+      <th onclick="sortBy('priority')">优先级</th>
       <th onclick="sortBy('hit_count')">命中</th>
       <th onclick="sortBy('created_at')">记录时间</th>
     </tr></thead>
@@ -331,9 +368,11 @@ function renderTable() {
     tr.onclick = function(){ showDetail(e.id); };
     var rcNames = {1:'内存超限',2:'连接失败',3:'进程宕机',4:'磁盘空间',5:'慢查询'};
     var rcName = rcNames[e.root_cause_id] || '其他';
+    var prioCls = e.priority >= 10 ? 'priority-high' : '';
     tr.innerHTML = '<td><b>#'+e.id+'</b></td>' +
       '<td>'+esc(e.title)+'</td>' +
       '<td><span class="badge badge-'+e.root_cause_id+'">'+rcName+'</span></td>' +
+      '<td class="'+prioCls+'">'+e.priority+'</td>' +
       '<td>'+e.hit_count+'</td>' +
       '<td>'+(e.created_at||'').slice(0,10)+'</td>';
     tbody.appendChild(tr);
@@ -345,9 +384,12 @@ function showDetail(id) {
   fetch('/api/entries/'+id).then(r=>r.json()).then(e => {
     var panel = document.getElementById('detail');
     var rcNames = {1:'内存超限',2:'连接失败',3:'进程宕机',4:'磁盘空间',5:'慢查询'};
+    var kws = (e.keywords||[]).map(function(k){ return '<span class="tag">'+esc(k)+'</span>'; }).join('');
     panel.querySelector('#detailContent').innerHTML =
       '<h2>#'+e.id+' '+esc(e.title)+'</h2>' +
+      '<div class="field"><label>优先级</label><div class="val"><b>'+e.priority+'</b></div></div>' +
       '<div class="field"><label>根因</label><div class="val">'+(rcNames[e.root_cause_id]||'')+' — '+esc(e.root_cause||'')+'</div></div>' +
+      '<div class="field"><label>关键词</label><div class="val">'+(kws||'<span style="color:#999">未设置</span>')+'</div></div>' +
       '<div class="field"><label>恢复步骤</label><div class="val"><pre>'+esc(e.recovery_action||'无')+'</pre></div></div>' +
       '<div class="field"><label>匹配 alertname</label><div class="val">'+esc(e.alertname_pattern||'—')+'</div></div>' +
       '<div class="field"><label>匹配 message</label><div class="val">'+esc(e.message_pattern||'—')+'</div></div>' +

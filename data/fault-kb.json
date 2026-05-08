@@ -1,56 +1,50 @@
 {
-  "version": 2,
+  "version": 3,
   "max_entries": 200,
   "created_at": "2026-05-09T00:00:00+08:00",
-  "root_causes": [
-    {
-      "id": 1,
-      "name": "内存超限",
-      "description": "进程内存使用超过限制，通常由大查询或资源泄漏引起"
-    },
-    {
-      "id": 2,
-      "name": "连接失败",
-      "description": "服务端口不可达，可能是进程崩溃或网络故障"
-    },
-    {
-      "id": 3,
-      "name": "进程宕机",
-      "description": "进程异常退出，可能被 OOM Killer 或磁盘故障触发"
-    },
-    {
-      "id": 4,
-      "name": "磁盘空间",
-      "description": "数据目录磁盘满，需清理或扩容"
-    },
-    {
-      "id": 5,
-      "name": "慢查询",
-      "description": "大查询或低效 SQL 导致执行超时"
-    }
-  ],
   "entries": [
     {
       "id": "001",
       "title": "OOM / 内存超限",
+      "keywords": [
+        "OOM",
+        "OutOfMemory",
+        "memory limit",
+        "内存超限",
+        "内存不足",
+        "mem_limit",
+        "oom killer"
+      ],
+      "priority": 10,
       "match": {
-        "alertname": ".*(OOM|Memory|OutOfMemory).*",
-        "message": "OutOfMemoryError|memory limit|OOM|oom killer|mem_limit exceeded",
         "exclude": "resolved|recover|ok|test|fake"
       },
-      "root_cause": "进程内存超限，通常由大查询或数据导入堵塞引起",
+      "root_cause": "进程内存超限，通常由大查询或资源泄漏引起",
       "root_cause_id": 1,
       "recovery_action": "1) 查看内存使用: top -b -n1 | head -20\n2) 取消大查询/任务: 根据进程类型使用对应管理命令\n3) 扩容内存限制或优化内存使用",
       "note": "",
       "created_at": "",
-      "hit_count": 2
+      "hit_count": 1,
+      "_matched_keywords": [
+        "OutOfMemory"
+      ],
+      "_score": 0.143
     },
     {
       "id": "002",
       "title": "服务端口不可达",
+      "keywords": [
+        "Connection refused",
+        "端口不可达",
+        "connect fail",
+        "无法连接",
+        "服务不可用",
+        "down",
+        "unavailable",
+        "连接超时"
+      ],
+      "priority": 10,
       "match": {
-        "alertname": ".*(Down|Unavailable|Connection).*",
-        "message": "Connection refused|connect.*fail|.*not found|unavailable|down",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "服务进程可能因元数据异常、磁盘满或进程崩溃导致不可用",
@@ -58,14 +52,27 @@
       "recovery_action": "1) docker logs <container> 检查日志\n2) 确认磁盘空间: df -h\n3) 重启容器: docker restart <container>",
       "note": "",
       "created_at": "",
-      "hit_count": 0
+      "hit_count": 1,
+      "_matched_keywords": [
+        "Connection refused"
+      ],
+      "_score": 0.125
     },
     {
       "id": "003",
       "title": "进程宕机 / 心跳超时",
+      "keywords": [
+        "heartbeat timeout",
+        "心跳超时",
+        "进程宕机",
+        "Dead backend",
+        "BE is down",
+        "unreachable",
+        "alive=0",
+        "not available"
+      ],
+      "priority": 10,
       "match": {
-        "alertname": ".*(Down|Heartbeat|Dead).*",
-        "message": "not.*available|heartbeat.*timeout|Dead|is down|unreachable",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "进程异常退出，可能被 OOM Killer 或磁盘故障触发",
@@ -78,9 +85,18 @@
     {
       "id": "004",
       "title": "磁盘空间不足",
+      "keywords": [
+        "disk usage",
+        "disk full",
+        "磁盘空间",
+        "磁盘满",
+        "no space left",
+        "存储不足",
+        "Insufficient disk",
+        "容量不足"
+      ],
+      "priority": 10,
       "match": {
-        "alertname": "Disk.*(Space|Full|Usage)|Storage.*Alert",
-        "message": "disk usage|disk full|no space left|Insufficient disk|capacity exceeded",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "数据目录磁盘满，需清理或扩容",
@@ -88,14 +104,27 @@
       "recovery_action": "1) df -h 确认各分区使用率\n2) 清理过期数据或日志\n3) 扩容磁盘或增加节点",
       "note": "",
       "created_at": "",
-      "hit_count": 0
+      "hit_count": 1,
+      "_matched_keywords": [
+        "disk full",
+        "no space left"
+      ],
+      "_score": 0.25
     },
     {
       "id": "005",
       "title": "查询超时 / 慢查询",
+      "keywords": [
+        "query timeout",
+        "查询超时",
+        "slow query",
+        "慢查询",
+        "执行超时",
+        "took long",
+        "查询执行时间过长"
+      ],
+      "priority": 10,
       "match": {
-        "alertname": ".*(Timeout|Slow).*",
-        "message": "query timeout|query exceeds|exceeded.*timeout|slow query|took.*long",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "大查询或低效 SQL 导致执行超时",
@@ -103,7 +132,11 @@
       "recovery_action": "1) 查看当前进程: ps aux --sort=-%mem | head\n2) 分析慢日志或在应用层诊断\n3) 优化查询或调整超时参数",
       "note": "",
       "created_at": "",
-      "hit_count": 0
+      "hit_count": 1,
+      "_matched_keywords": [
+        "slow query"
+      ],
+      "_score": 0.143
     }
   ]
 }

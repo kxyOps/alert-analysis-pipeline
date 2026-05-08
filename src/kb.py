@@ -3,11 +3,11 @@
 故障知识库 CLI 管理工具 v2
 
 通用的告警知识库引擎 — 不绑定任何特定服务。
-支持多字段正则匹配，适合集成到告警流水线中。
+支持多字段正则过滤 + 关键词评分排序。
 
 用法:
   kb.py list                              # 列出所有条目
-  kb.py add <消息> <根因ID> [备注]        # 新增记录
+  kb.py add <消息> <根因ID> [备注]        # 新增记录（自动提取关键词）
   kb.py match <消息>                      # 纯文本匹配
   kb.py match --json '<JSON>'             # 告警 payload 匹配
   kb.py cleanup                           # 清理超量记录
@@ -28,11 +28,10 @@ TZ = timezone(timedelta(hours=8))
 
 
 def ensure_data():
-    """确保数据文件和目录存在"""
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(KB_PATH):
         default = {
-            'version': 2,
+            'version': 3,
             'max_entries': MAX_ENTRIES,
             'created_at': datetime.now(TZ).isoformat(),
             'entries': []
@@ -57,22 +56,44 @@ def next_id(data):
     return f"{max(ids) + 1 if ids else 1:03d}"
 
 
-def add(alert_msg, root_cause_id, note=''):
+def _extract_keywords(text):
+    """从文本中提取重要的中文/英文分词作为关键词"""
+    text = text.strip()
+    kws = []
+    # 英文单词（2个字符以上）
+    for w in re.findall(r'[a-zA-Z][a-zA-Z0-9_\-\.]{2,}', text):
+        kws.append(w.lower())
+    # 中文词组（2个字以上）
+    for w in re.findall(r'[\u4e00-\u9fff]{2,}', text):
+        kws.append(w)
+    # 去重 + 限制数量
+    seen = set()
+    result = []
+    for k in kws:
+        if k not in seen:
+            seen.add(k)
+            result.append(k)
+    return result[:15]  # 最多15个关键词
+
+
+def add(alert_msg, root_cause_id, note='', keywords=None):
     """新增故障记录"""
     data = load()
+    keywords = keywords or _extract_keywords(alert_msg)
     entry = {
         'id': next_id(data),
         'title': alert_msg[:80],
+        'keywords': keywords,
+        'priority': 10,
         'match': {
-            'message': re.escape(alert_msg[:50]),
             'exclude': 'resolved|recover|ok|test|fake'
         },
         'root_cause_id': int(root_cause_id),
         'note': note,
         'created_at': datetime.now(TZ).isoformat(),
-        'hit_count': 0
+        'hit_count': 0,
+        # 从已有相同根因的条目继承描述
     }
-    # 从已有条目中找根因描述
     for e in data['entries']:
         if str(e.get('root_cause_id')) == str(root_cause_id):
             entry['root_cause'] = e.get('root_cause', '')
@@ -122,78 +143,119 @@ def match_payload(payload):
 
 
 def _match_all(fields):
-    """核心匹配逻辑：多字段交叉验证"""
+    """
+    核心匹配逻辑：正则过滤 + 关键词评分排序
+
+    流程:
+    1. 排除规则 → 被排除的跳过
+    2. alertname 正则 → 不匹配的跳过
+    3. 关键词评分 → 命中数/总词数 算分
+    4. 无关键词的条目走旧版 message 正则保底
+    5. 按得分降序 + 优先级降序，取最优
+
+    返回的 result 增加 score 和 matched_keywords 字段
+    """
     data = load()
     text_lower = {k: v.lower() for k, v in fields.items() if v}
+    msg_text = text_lower.get('message', '')
+    an_text = text_lower.get('alertname', '')
+
+    scored = []  # [(score, priority, entry), ...]
 
     for e in data['entries']:
         match = e.get('match', {})
+
+        # ── 旧格式兼容（无 match 字段） ──
         if not match:
             old_pattern = e.get('alert_pattern', '')
-            if old_pattern:
-                msg = text_lower.get('message', '')
-                if msg and re.search(old_pattern, msg, re.IGNORECASE):
-                    e['hit_count'] = e.get('hit_count', 0) + 1
-                    save(data)
-                    return _build_result(e)
+            if old_pattern and msg_text and re.search(old_pattern, msg_text, re.IGNORECASE):
+                scored.append((1.0, e.get('priority', 0), e))
             continue
 
-        # 排除规则（防止恢复/测试误判）
+        # ── 排除规则（词边界匹配） ──
         exclude_pat = match.get('exclude', '')
         if exclude_pat:
+            excluded = False
             for _, txt in text_lower.items():
-                if re.search(exclude_pat, txt, re.IGNORECASE):
-                    return None
+                for pat in exclude_pat.split('|'):
+                    pat = pat.strip()
+                    if pat and re.search(r'\b' + pat + r'\b', txt, re.IGNORECASE):
+                        excluded = True
+                        break
+                if excluded:
+                    break
+            if excluded:
+                continue
 
-        checks_passed = 0
-        checks_required = 0
-
-        # alertname 匹配
+        # ── alertname 正则过滤 ──
         an_pat = match.get('alertname', '')
-        an_text = text_lower.get('alertname', '')
-        if an_pat and an_text:
-            checks_required += 1
-            if re.search(an_pat, an_text, re.IGNORECASE):
-                checks_passed += 1
+        if an_pat and an_text and not re.search(an_pat, an_text, re.IGNORECASE):
+            continue
 
-        # message 匹配
+        # ── 关键词评分 ──
+        keywords = e.get('keywords', [])
+        priority = e.get('priority', 0)
+
+        if keywords and msg_text:
+            matched_kws = [kw for kw in keywords if kw.lower() in msg_text]
+            if matched_kws:
+                score = len(matched_kws) / len(keywords)
+                e['_matched_keywords'] = matched_kws
+                e['_score'] = round(score, 3)
+                scored.append((score, priority, e))
+                continue
+
+        # ── 无关键词 → 用 message 正则保底 ──
         msg_pat = match.get('message', '')
-        msg_text = text_lower.get('message', '')
-        if msg_pat and msg_text:
-            checks_required += 1
+        if not keywords and msg_pat and msg_text:
             if re.search(msg_pat, msg_text, re.IGNORECASE):
-                checks_passed += 1
+                scored.append((0.5, priority, e))
+                continue
 
-        # 所有有定义的字段都必须匹配
-        if checks_required > 0 and checks_passed == checks_required:
-            e['hit_count'] = e.get('hit_count', 0) + 1
-            save(data)
-            return _build_result(e)
+    if not scored:
+        return None
 
-    return None
+    # 按评分降序 → 优先级降序 → id 升序
+    scored.sort(key=lambda x: (-x[0], -x[1], x[2].get('id', '')))
+    best = scored[0][2]
+
+    # 更新命中次数
+    best['hit_count'] = best.get('hit_count', 0) + 1
+    save(data)
+
+    return _build_result(best)
 
 
 def _build_result(e):
-    return {
+    result = {
         'id': e['id'],
         'title': e.get('title', ''),
         'root_cause': e.get('root_cause', ''),
         'root_cause_id': e.get('root_cause_id', ''),
         'recovery_action': e.get('recovery_action', ''),
-        'note': e.get('note', '')
+        'note': e.get('note', ''),
     }
+    # 如果有关键词匹配信息，附加到结果
+    if '_score' in e:
+        result['_score'] = e['_score']
+    if '_matched_keywords' in e:
+        result['_matched_keywords'] = e['_matched_keywords']
+    return result
 
 
 def list_entries():
     data = load()
     for e in data['entries']:
         m = e.get('match', {})
+        kws = e.get('keywords', [])
+        priority = e.get('priority', 0)
         an = m.get('alertname', e.get('alert_pattern', '—'))[:40]
-        ms = m.get('message', '—')[:40]
         c = e.get('created_at', '')
-        print(f"#{e['id']}  {e.get('title','')[:60]}")
-        print(f"    匹配 alertname: {an}")
-        print(f"    匹配 message:   {ms}")
+        print(f"#{e['id']}  {e.get('title','')[:60]}  [p={priority}]")
+        if kws:
+            print(f"    关键词: {', '.join(kws[:8])}{'...' if len(kws) > 8 else ''}")
+        else:
+            print(f"    匹配 alertname: {an}")
         print(f"    根因: {e.get('root_cause','')[:60]}")
         print(f"    命中: {e.get('hit_count',0)}次  创建: {c[:16] if c else '未记录'}")
         print()
@@ -239,7 +301,7 @@ if __name__ == '__main__':
         else:
             result = match_text(sys.argv[2])
         if result:
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print("NO_MATCH")
 
