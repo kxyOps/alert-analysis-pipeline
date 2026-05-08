@@ -402,13 +402,13 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
   <div class="modal">
     <h3 id="modalTitle">新增条目</h3>
     <label>症状分类</label>
-    <select id="f_symptom_id">
-      <option value="">请选择</option>
+    <input list="symptom_list" id="f_symptom_id" placeholder="选择已有或输入新分类">
+    <datalist id="symptom_list">
       <option value="mem_high">内存使用率高</option>
       <option value="svc_down">服务不可用</option>
       <option value="disk_full">存储空间不足</option>
       <option value="query_slow">查询延迟</option>
-    </select>
+    </datalist>
     <label>类型</label>
     <select id="f_entry_type">
       <option value="specific">specific</option>
@@ -595,12 +595,45 @@ function closeModal() {
   document.getElementById('modalOverlay').classList.remove('show');
 }
 
+var _PINYIN_MAP = {'内存':'neicun','使用率':'shiyonglv','高':'gao','服务':'fuwu','不可用':'bukeyong','存储':'cunchu','空间':'kongjian','不足':'buzu','查询':'chaxun','延迟':'yanchi','CPU':'cpu','满载':'manzai','过高':'guogao','过低':'guodi','磁盘':'cipan','占用':'zhanyong','网络':'wangluo','丢包':'diubao','超时':'chaoshi','连接':'lianjie','失败':'shibai','异常':'yichang','错误':'cuowu','警告':'jinggao','阈值':'yuzhi','触发':'chufa','恢复':'huifu','重启':'zhongqi','宕机':'dangji','中断':'zhongduan','卡顿':'kadun','响应':'xiangying','数据库':'shujuku','主从':'zhucong','同步':'tongbu','复制':'fuzhi','堆积':'duiji','队列':'duilie','消息':'xiaoxi','缓存':'huancun','命中':'mingzhong','过期':'guoqi','刷新':'shuaxin','配置':'peizhi','变更':'biangeng','部署':'bushi','升级':'shengji','版本':'banben','兼容':'jianrong','权限':'quanxian','认证':'renzheng','授权':'shouquan','证书':'zhengshu','加密':'jiami','解密':'jiemi','负载':'fuzai','均衡':'junheng','限流':'xianliu','熔断':'rongduan','降级':'jiangji','兜底':'doudi','告警':'gaojing','监控':'jiankong','日志':'rizhi','指标':'zhibiao','链路':'lianlu','追踪':'zhuizong','跨度':'kuadu','采样':'caiyang','聚合':'juhe','统计':'tongji','分析':'fenxi','报表':'baobiao','仪表盘':'yibiaopan','面板':'mianban','视图':'shitu','图表':'tubiao','趋势':'qushi','对比':'duibi','基线':'jixian','偏差':'piancha','波动':'bodong','峰值':'fengzhi','谷值':'guzhi','均值':'junzhi','百分位':'baifenwei','方差':'fangcha','标准差':'biaozhuncha','概率':'gailv','置信':'zhixin','区间':'qujian','样本':'yangben','总体':'zongti','抽样':'chouyang','误差':'wucha','精度':'jingdu','准确':'zhunque','精确':'jingque','分类':'fenlei','聚类':'julei','特征':'tezheng','工程':'gongcheng','选择':'xuanze','提取':'tiqu','构造':'gouzao','变换':'bianhuan','标准化':'biaozhunhua','编码':'bianma','向量':'xiangliang','矩阵':'juzhen','优化':'youhua','损失':'sunshi','函数':'hanshu','激活':'jihuo','传播':'chuanbo','批量':'piliang','大小':'daxiao','衰减':'shuaijian','动量':'dongliang','正则':'zhengze','验证':'yanzheng','测试':'ceshi','评估':'pinggu','曲线':'quxian','决策':'juece','树':'shu','深度':'shendu','学习':'xuexi','模型':'moxing','训练':'xunlian','预测':'yuce','回归':'huigui','降维':'jiangwei','嵌入':'qianru','排序':'paixu','分词':'fenci','词频':'cipin','检索':'jiansuo','索引':'suoyin','相似度':'xiangsidu','距离':'juli','密度':'midu','划分':'huafen','轮廓':'lunkuo','系数':'xishu','集中':'jizhong','CPU使用率':'cpu_shiyonglv','IO':'io','读写':'duxie','带宽':'daikuan','流量':'liuliang','入侵':'ruqin','攻击':'gongji','漏洞':'loudong','补丁':'buding','进程':'jincheng','线程':'xiancheng','死锁':'sisuo','内存泄漏':'neicunxielou','泄漏':'xielou','溢出':'yichu','OOM':'oom','GC':'gc','回收':'huishou','堆':'dui','栈':'zhan','句柄':'jubing','文件描述符':'wenjianshumiaofu','连接池':'lianjiechi','线程池':'xianchengchi','队列积压':'duiliejiya','积压':'jiya'}
+function _pinyinId(s) {
+  var result = s;
+  // 先尝试匹配较长的词
+  var keys = Object.keys(_PINYIN_MAP).sort(function(a,b){return b.length-a.length;});
+  for (var i = 0; i < keys.length; i++) {
+    result = result.split(keys[i]).join(_PINYIN_MAP[keys[i]]);
+  }
+  // 保留字母、数字、下划线，其余转下划线，合并连续下划线，去首尾
+  return result.toLowerCase().replace(/[^a-z0-9_]+/g,'_').replace(/^_+|_+$/g,'').replace(/_+/g,'_') || 'custom';
+}
 function submitForm() {
   var id = document.getElementById('f_id').value;
   var kwRaw = document.getElementById('f_keywords').value.trim();
   var keywords = kwRaw ? kwRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+  var symInput = document.getElementById('f_symptom_id');
+  var symVal = symInput.value.trim();
+  // 在 datalist 中查找已知选项
+  var dl = document.getElementById('symptom_list');
+  var knownOpts = {};
+  Array.prototype.forEach.call(dl.options, function(opt) {
+    knownOpts[opt.value] = opt.textContent;
+  });
+  var symptom_id, symptom;
+  if (knownOpts[symVal]) {
+    // 选择了已知分类
+    symptom_id = symVal;
+    symptom = knownOpts[symVal];
+  } else if (symVal) {
+    // 全新分类：自动生成 ID
+    symptom_id = _pinyinId(symVal);
+    symptom = symVal;
+  } else {
+    symptom_id = '';
+    symptom = '';
+  }
   var body = {
-    symptom_id: document.getElementById('f_symptom_id').value,
+    symptom_id: symptom_id,
+    symptom: symptom,
     entry_type: document.getElementById('f_entry_type').value,
     title: document.getElementById('f_title').value.trim(),
     root_cause: document.getElementById('f_root_cause').value.trim(),
@@ -611,9 +644,6 @@ function submitForm() {
     exclude_pattern: document.getElementById('f_exclude_pattern').value.trim(),
     note: document.getElementById('f_note').value.trim()
   };
-  var symSel = document.getElementById('f_symptom_id');
-  body.symptom = symSel.options[symSel.selectedIndex].text;
-  if (!body.symptom_id) body.symptom = '';
   var url, method;
   if (id) {
     url = '/api/entries/' + id;
