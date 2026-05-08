@@ -23,7 +23,7 @@ from pathlib import Path
 DATA_DIR = Path(os.environ.get('KB_DATA_DIR', Path(__file__).parent.parent / 'data'))
 DB_PATH = DATA_DIR / 'fault-kb.db'
 JSON_PATH = DATA_DIR / 'fault-kb.json'  # 用于迁移
-PORT = int(os.environ.get('KB_PORT', sys.argv[1])) if len(sys.argv) > 1 or 'KB_PORT' in os.environ else 8888
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get('KB_PORT', 8888))
 TZ = timezone(timedelta(hours=8))
 
 # ── 数据库初始化 ─────────────────────────────────────────
