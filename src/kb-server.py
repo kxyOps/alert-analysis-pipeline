@@ -170,7 +170,7 @@ def api_add(conn, data):
         nid,
         data.get('title', ''),
         json.dumps(keywords, ensure_ascii=False) if keywords else '',
-        data.get('type', 'specific'),
+        data.get('type') or data.get('entry_type') or 'specific',
         data.get('alertname_pattern', ''),
         data.get('message_pattern', ''),
         data.get('exclude_pattern', 'resolved|recover|ok|test|fake'),
@@ -332,6 +332,24 @@ tr:hover{background:#f8f9ff}
 pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:auto;white-space:pre-wrap}
 .loading{text-align:center;padding:40px;color:#999}
 @media(max-width:768px){.bar .stats{display:none}.detail-panel{width:100%;right:-100%}}
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.45);z-index:200;justify-content:center;align-items:center}
+.modal-overlay.show{display:flex}
+.modal{background:#fff;border-radius:8px;width:520px;max-height:85vh;overflow-y:auto;padding:24px;box-shadow:0 8px 30px rgba(0,0,0,.2)}
+.modal h3{font-size:17px;margin-bottom:16px;color:#1a1a1a}
+.modal label{display:block;font-size:12px;color:#666;margin-bottom:3px;margin-top:12px}
+.modal label:first-of-type{margin-top:0}
+.modal input,.modal textarea,.modal select{width:100%;padding:8px 10px;border:1px solid #e0e0e0;border-radius:5px;font-size:13px;font-family:inherit;box-sizing:border-box}
+.modal textarea{resize:vertical;min-height:60px}
+.modal .btn-row{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+.modal .btn{padding:8px 20px;border:none;border-radius:5px;font-size:13px;cursor:pointer;font-family:inherit}
+.modal .btn-primary{background:#4a90d9;color:#fff}
+.modal .btn-primary:hover{background:#3a7bc8}
+.modal .btn-cancel{background:#e0e0e0;color:#555}
+.modal .btn-cancel:hover{background:#d0d0d0}
+.btn-add{background:#4a90d9;color:#fff;border:none;padding:8px 14px;border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap}
+.btn-add:hover{background:#3a7bc8}
+.btn-edit{background:#4a90d9;color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;margin-left:10px;vertical-align:middle}
+.btn-edit:hover{background:#3a7bc8}
 </style>
 </head>
 <body>
@@ -352,6 +370,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
     <option value="">类型</option>
     <option value="-created_at">最近添加</option>
   </select>
+  <button class="btn-add" onclick="openAddModal()">＋ 新增</button>
   <div class="stats" id="stats"></div>
 </div>
 <div class="tabs">
@@ -378,6 +397,45 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
 <div class="detail-panel" id="detail">
   <span class="close" onclick="closeDetail()">&times;</span>
   <div id="detailContent"></div>
+</div>
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3 id="modalTitle">新增条目</h3>
+    <label>症状分类</label>
+    <select id="f_symptom_id">
+      <option value="">请选择</option>
+      <option value="mem_high">内存使用率高</option>
+      <option value="svc_down">服务不可用</option>
+      <option value="disk_full">存储空间不足</option>
+      <option value="query_slow">查询延迟</option>
+    </select>
+    <label>类型</label>
+    <select id="f_entry_type">
+      <option value="specific">specific</option>
+      <option value="catchall">catchall</option>
+    </select>
+    <label>标题</label>
+    <input type="text" id="f_title" placeholder="简要描述">
+    <label>根因</label>
+    <textarea id="f_root_cause" placeholder="故障根因"></textarea>
+    <label>关键词（逗号分隔）</label>
+    <input type="text" id="f_keywords" placeholder="keyword1, keyword2">
+    <label>恢复步骤</label>
+    <textarea id="f_recovery_action" placeholder="恢复操作步骤"></textarea>
+    <label>匹配 alertname</label>
+    <input type="text" id="f_alertname_pattern" placeholder="正则表达式">
+    <label>匹配 message</label>
+    <input type="text" id="f_message_pattern" placeholder="正则表达式">
+    <label>排除规则</label>
+    <input type="text" id="f_exclude_pattern" value="resolved|recover|ok|test|fake">
+    <label>备注</label>
+    <textarea id="f_note" placeholder="补充说明"></textarea>
+    <input type="hidden" id="f_id">
+    <div class="btn-row">
+      <button class="btn btn-cancel" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitForm()">保存</button>
+    </div>
+  </div>
 </div>
 <script>
 let allData = [];
@@ -445,7 +503,7 @@ function showDetail(id) {
     var panel = document.getElementById('detail');
     var kws = (e.keywords||[]).map(function(k){ return '<span class="tag">'+esc(k)+'</span>'; }).join('');
     panel.querySelector('#detailContent').innerHTML =
-      '<h2>#'+e.id+' '+esc(e.title)+'</h2>' +
+      '<h2>#'+e.id+' '+esc(e.title)+'<button class="btn-edit" onclick="openEditModal(\''+e.id+'\')">编辑</button></h2>' +
       '<div class="field"><label>症状分类</label><div class="val"><b>'+esc(e.symptom||'—')+'</b></div></div>' +
       '<div class="field"><label>类型</label><div class="val"><b>'+(e.type||'specific')+'</b></div></div>' +
       '<div class="field"><label>根因</label><div class="val">'+esc(e.root_cause||'')+'</div></div>' +
@@ -498,6 +556,80 @@ function sortBy(field) {
 }
 
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function openAddModal() {
+  document.getElementById('modalTitle').textContent = '新增条目';
+  document.getElementById('f_id').value = '';
+  document.getElementById('f_symptom_id').value = '';
+  document.getElementById('f_entry_type').value = 'specific';
+  document.getElementById('f_title').value = '';
+  document.getElementById('f_root_cause').value = '';
+  document.getElementById('f_keywords').value = '';
+  document.getElementById('f_recovery_action').value = '';
+  document.getElementById('f_alertname_pattern').value = '';
+  document.getElementById('f_message_pattern').value = '';
+  document.getElementById('f_exclude_pattern').value = 'resolved|recover|ok|test|fake';
+  document.getElementById('f_note').value = '';
+  document.getElementById('modalOverlay').classList.add('show');
+}
+
+function openEditModal(id) {
+  fetch('/api/entries/' + id).then(function(r){ return r.json(); }).then(function(e) {
+    document.getElementById('modalTitle').textContent = '编辑条目 #' + e.id;
+    document.getElementById('f_id').value = e.id;
+    document.getElementById('f_symptom_id').value = e.symptom_id || '';
+    document.getElementById('f_entry_type').value = e.entry_type || 'specific';
+    document.getElementById('f_title').value = e.title || '';
+    document.getElementById('f_root_cause').value = e.root_cause || '';
+    document.getElementById('f_keywords').value = (e.keywords || []).join(', ');
+    document.getElementById('f_recovery_action').value = e.recovery_action || '';
+    document.getElementById('f_alertname_pattern').value = e.alertname_pattern || '';
+    document.getElementById('f_message_pattern').value = e.message_pattern || '';
+    document.getElementById('f_exclude_pattern').value = e.exclude_pattern || '';
+    document.getElementById('f_note').value = e.note || '';
+    document.getElementById('modalOverlay').classList.add('show');
+  });
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('show');
+}
+
+function submitForm() {
+  var id = document.getElementById('f_id').value;
+  var kwRaw = document.getElementById('f_keywords').value.trim();
+  var keywords = kwRaw ? kwRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+  var body = {
+    symptom_id: document.getElementById('f_symptom_id').value,
+    entry_type: document.getElementById('f_entry_type').value,
+    title: document.getElementById('f_title').value.trim(),
+    root_cause: document.getElementById('f_root_cause').value.trim(),
+    keywords: keywords,
+    recovery_action: document.getElementById('f_recovery_action').value.trim(),
+    alertname_pattern: document.getElementById('f_alertname_pattern').value.trim(),
+    message_pattern: document.getElementById('f_message_pattern').value.trim(),
+    exclude_pattern: document.getElementById('f_exclude_pattern').value.trim(),
+    note: document.getElementById('f_note').value.trim()
+  };
+  var symSel = document.getElementById('f_symptom_id');
+  body.symptom = symSel.options[symSel.selectedIndex].text;
+  if (!body.symptom_id) body.symptom = '';
+  var url, method;
+  if (id) {
+    url = '/api/entries/' + id;
+    method = 'PUT';
+  } else {
+    url = '/api/entries';
+    method = 'POST';
+  }
+  fetch(url, {method: method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(function(r){ return r.json(); })
+    .then(function() {
+      closeModal();
+      closeDetail();
+      loadData();
+    });
+}
 
 loadData();
 </script>
