@@ -8,6 +8,8 @@
 用法:
   kb.py list                              # 列出所有条目
   kb.py add <消息> <根因ID> [备注]        # 新增记录（自动提取关键词）
+  kb.py delete <id>                       # 删除指定记录
+  kb.py edit <id> [--title ...] [--symptom ...] [--symptom-id ...] [--root-cause ...] [--keywords ...] [--type ...]
   kb.py match <消息>                      # 纯文本匹配
   kb.py match --json '<JSON>'             # 告警 payload 匹配
   kb.py cleanup                           # 清理超量记录
@@ -266,6 +268,37 @@ def list_entries():
         print()
 
 
+def find_entry(data, entry_id):
+    for e in data['entries']:
+        if e['id'] == entry_id:
+            return e
+    return None
+
+
+def delete(entry_id):
+    data = load()
+    entry = find_entry(data, entry_id)
+    if not entry:
+        print(f"#{entry_id} 不存在")
+        sys.exit(1)
+    data['entries'].remove(entry)
+    save(data)
+    print(f"已删除 #{entry_id}")
+
+
+def edit(entry_id, **fields):
+    data = load()
+    entry = find_entry(data, entry_id)
+    if not entry:
+        print(f"#{entry_id} 不存在")
+        sys.exit(1)
+    for k, v in fields.items():
+        if v is not None:
+            entry[k] = v
+    save(data)
+    print(f"已更新 #{entry_id}")
+
+
 def cleanup():
     data = load()
     entries = data['entries']
@@ -282,7 +315,7 @@ def cleanup():
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("用法: kb.py <list|add|match|cleanup> [...]")
+        print("用法: kb.py <list|add|delete|edit|match|cleanup> [...]")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -296,6 +329,39 @@ if __name__ == '__main__':
             sys.exit(1)
         aid = add(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else '')
         print(f"KB_WRITTEN {aid}")
+
+    elif cmd == 'delete':
+        if len(sys.argv) < 3:
+            print("用法: kb.py delete <id>")
+            sys.exit(1)
+        delete(sys.argv[2])
+
+    elif cmd == 'edit':
+        if len(sys.argv) < 3:
+            print("用法: kb.py edit <id> [--title T] [--symptom S] [--symptom-id SID] [--root-cause RC] [--keywords K1,K2] [--type specific|catchall]")
+            sys.exit(1)
+        entry_id = sys.argv[2]
+        args = sys.argv[3:]
+        fields = {}
+        i = 0
+        while i < len(args):
+            if args[i] == '--title' and i + 1 < len(args):
+                fields['title'] = args[i + 1]; i += 2
+            elif args[i] == '--symptom' and i + 1 < len(args):
+                fields['symptom'] = args[i + 1]; i += 2
+            elif args[i] == '--symptom-id' and i + 1 < len(args):
+                fields['symptom_id'] = args[i + 1]; i += 2
+            elif args[i] == '--root-cause' and i + 1 < len(args):
+                fields['root_cause'] = args[i + 1]; i += 2
+            elif args[i] == '--keywords' and i + 1 < len(args):
+                fields['keywords'] = [k.strip() for k in args[i + 1].split(',') if k.strip()]; i += 2
+            elif args[i] == '--type' and i + 1 < len(args):
+                fields['type'] = args[i + 1]; i += 2
+            else:
+                print(f"未知参数: {args[i]}"); sys.exit(1)
+        if not fields:
+            print("至少指定一个要修改的字段"); sys.exit(1)
+        edit(entry_id, **fields)
 
     elif cmd == 'match':
         if len(sys.argv) < 3:
