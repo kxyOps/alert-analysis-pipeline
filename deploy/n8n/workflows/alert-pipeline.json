@@ -1,153 +1,182 @@
 {
-  "name": "告警接收 → KB 匹配 → 飞书推送",
+  "name": "doris alter",
   "nodes": [
     {
-      "id": "webhook-entry",
-      "name": "Webhook 接收",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 1,
-      "position": [250, 300],
       "parameters": {
         "httpMethod": "POST",
-        "path": "alert-receiver",
+        "path": "/grafana-doris",
+        "responseMode": "responseNode",
         "options": {}
       },
-      "webhookId": "alert-receiver"
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "56e2b063-d81b-4bf9-a617-85646773586b",
+      "name": "Webhook",
+      "webhookId": "11fbf571-7412-4d5a-99a0-6c5f4340ce21"
     },
     {
-      "id": "code-docker-logs",
-      "name": "采集容器日志",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [450, 300],
-      "parameters": {
-        "language": "javascript",
-        "code": "// 通过 Docker API Unix socket 采集日志\n// 不依赖 docker CLI（适用于 n8n Hardened Image）\nconst http = require('http');\n\nconst containerNames = (($json.body || {}).containers || ['target-app']).join('|');\n\nfunction getLogs(container) {\n  return new Promise((resolve, reject) => {\n    const options = {\n      socketPath: '/var/run/docker.sock',\n      path: `/containers/${container}/logs?stdout=true&stderr=true&tail=50`,\n      method: 'GET'\n    };\n    const req = http.request(options, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve(data.slice(0, 2000)));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst results = {};\nfor (const name of containerNames) {\n  try {\n    results[name] = await getLogs(name) || '无日志';\n  } catch (e) {\n    results[name] = `采集失败: ${e.message}`;\n  }\n}\n\nreturn {\n  ...$json,\n  _containerLogs: results\n};"
-      }
-    },
-    {
-      "id": "set-payload",
-      "name": "格式化 Payload",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 2,
-      "position": [650, 300],
-      "parameters": {
-        "values": {
-          "string": [
-            {
-              "name": "payloadStr",
-              "value": "=JSON.stringify($json)"
-            }
-          ]
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "crypto-hmac",
-      "name": "HMAC 签名",
-      "type": "n8n-nodes-base.crypto",
-      "typeVersion": 1,
-      "position": [850, 300],
-      "parameters": {
-        "action": "hmac",
-        "encoding": "hex",
-        "algorithm": "sha256",
-        "data": "={{ $json.payloadStr }}",
-        "secretKey": "={{ $env.WEBHOOK_SECRET }}"
-      }
-    },
-    {
-      "id": "http-forward",
-      "name": "转发到 Hermes",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1050, 300],
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.HERMES_WEBHOOK_URL }}",
-        "authentication": "none",
-        "sendBody": true,
-        "bodyContentType": "raw",
-        "bodyParameters": {},
-        "rawContentType": "application/json",
-        "sendQuery": false,
+        "url": "http://192.168.167.134:8644/webhooks/doris-alerts",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
             {
               "name": "X-Webhook-Signature",
               "value": "={{ $json.data }}"
             }
           ]
         },
-        "options": {
-          "body": "={{ $json.payloadStr }}"
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.payloadStr }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        832,
+        0
+      ],
+      "id": "2edafa1a-6a52-4183-9b6f-afba4b48ed52",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "e36c6715-1813-403f-a492-c7ba7b866bbd",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8abadf4d-124e-4abe-92ae-0efedb1ad6d4",
+              "name": "payloadStr",
+              "value": "=JSON.stringify($json)",
+              "type": "string"
+            },
+            {
+              "id": "302741d9-e7da-463c-a610-4eebffdf69de",
+              "name": "payloadObj",
+              "value": "={{ $json.body }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        416,
+        0
+      ],
+      "id": "b6cb46f0-0219-4c80-b9d6-0a49c72798c4",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "value": "={{ $json.payloadStr }}"
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        624,
+        0
+      ],
+      "id": "936c9fe6-204c-40b7-b55c-c11eb2e01dd2",
+      "name": "Crypto",
+      "credentials": {
+        "crypto": {
+          "id": "zc6cTbz7R0N65ehD",
+          "name": "Crypto account"
         }
       }
     },
     {
-      "id": "webhook-response",
-      "name": "响应",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [1250, 300],
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={\"status\":\"ok\",\"forwarded\":true}"
-      }
+        "jsCode": "// Doris 日志采集 - 通过 Docker API 获取容器日志\n    const http = require('http');\n    \n    const containerName = 'doris-standalone';\n    const tailLines = 100;\n    \n    // 调 Docker Engine API 取日志\n    function callDocker(socketPath, path) {\n      return new Promise((resolve, reject) => {\n        const options = { socketPath, path, method: 'GET' };\n        const req = http.request(options, (res) => {\n          let data = '';\n          res.on('data', (chunk) => { data += chunk; });\n          res.on('end', () => resolve(data));\n        });\n        req.on('error', (err) => reject(err));\n        req.end();\n      });\n    }\n    \n    try {\n      // 采集 FE/BE 日志（doris-standalone 可能是单容器，内含 FE+BE）\n      const logs = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/logs?stdout=true&stderr=true&tail=${tailLines}&timestamps=true);\n    \n      // 获取容器状态\n      const infoRaw = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/json);\n      const info = JSON.parse(infoRaw);\n    \n      // 返回增强后的 payload\n      return [{\n        json: {\n          ...items[0].json,\n          _dorisLogs: logs,\n          _dorisStatus: info.State.Status,\n          _dorisStartedAt: info.State.StartedAt\n        }\n      }];\n    } catch (err) {\n      // 日志采集失败不阻塞告警\n      return [{\n        json: {\n          ...items[0].json,\n          _dorisLogs: Log collection failed: ${err.message},\n          _dorisLogsError: true\n        }\n      }];\n    }\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "d8720182-b667-4398-bce0-c84b134875c7",
+      "name": "Code in JavaScript"
     }
   ],
+  "pinData": {},
   "connections": {
-    "Webhook 接收": {
+    "Webhook": {
       "main": [
         [
           {
-            "node": "采集容器日志",
+            "node": "Code in JavaScript",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "采集容器日志": {
+    "HTTP Request": {
       "main": [
         [
           {
-            "node": "格式化 Payload",
+            "node": "Respond to Webhook",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "格式化 Payload": {
+    "Edit Fields": {
       "main": [
         [
           {
-            "node": "HMAC 签名",
+            "node": "Crypto",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "HMAC 签名": {
+    "Crypto": {
       "main": [
         [
           {
-            "node": "转发到 Hermes",
+            "node": "HTTP Request",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "转发到 Hermes": {
+    "Code in JavaScript": {
       "main": [
         [
           {
-            "node": "响应",
+            "node": "Edit Fields",
             "type": "main",
             "index": 0
           }
@@ -155,13 +184,16 @@
       ]
     }
   },
+  "active": true,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
-  "staticData": null,
-  "pinData": {},
-  "versionId": "template-v1",
-  "triggerCount": 1,
-  "active": false,
+  "versionId": "bda35940-966b-4b49-9603-c2a83ecb92ba",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9670478684a3930306617b540aec352e19e12f5f7745858463aff2267da34c8b"
+  },
+  "id": "y9V8iJ76MzdcUOaH",
   "tags": []
 }
