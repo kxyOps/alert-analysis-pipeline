@@ -1,5 +1,5 @@
 {
-  "name": "doris alter",
+  "name": "Alert Pipeline",
   "nodes": [
     {
       "parameters": {
@@ -21,7 +21,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://192.168.167.134:8644/webhooks/doris-alerts",
+        "url": "={{ $env.HERMES_WEBHOOK_URL || 'http://localhost:8644/webhooks/alert-receiver' }}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -114,7 +114,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Doris 日志采集 - 通过 Docker API 获取容器日志\n    const http = require('http');\n    \n    const containerName = 'doris-standalone';\n    const tailLines = 100;\n    \n    // 调 Docker Engine API 取日志\n    function callDocker(socketPath, path) {\n      return new Promise((resolve, reject) => {\n        const options = { socketPath, path, method: 'GET' };\n        const req = http.request(options, (res) => {\n          let data = '';\n          res.on('data', (chunk) => { data += chunk; });\n          res.on('end', () => resolve(data));\n        });\n        req.on('error', (err) => reject(err));\n        req.end();\n      });\n    }\n    \n    try {\n      // 采集 FE/BE 日志（doris-standalone 可能是单容器，内含 FE+BE）\n      const logs = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/logs?stdout=true&stderr=true&tail=${tailLines}&timestamps=true);\n    \n      // 获取容器状态\n      const infoRaw = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/json);\n      const info = JSON.parse(infoRaw);\n    \n      // 返回增强后的 payload\n      return [{\n        json: {\n          ...items[0].json,\n          _dorisLogs: logs,\n          _dorisStatus: info.State.Status,\n          _dorisStartedAt: info.State.StartedAt\n        }\n      }];\n    } catch (err) {\n      // 日志采集失败不阻塞告警\n      return [{\n        json: {\n          ...items[0].json,\n          _dorisLogs: Log collection failed: ${err.message},\n          _dorisLogsError: true\n        }\n      }];\n    }\n"
+        "jsCode": "// 容器日志采集 - 通过 Docker API 获取\n    const http = require('http');\n    \n    const containerName = process.env.MONITOR_CONTAINER || 'doris-standalone';\n    const tailLines = 100;\n    \n    // 调 Docker Engine API 取日志\n    function callDocker(socketPath, path) {\n      return new Promise((resolve, reject) => {\n        const options = { socketPath, path, method: 'GET' };\n        const req = http.request(options, (res) => {\n          let data = '';\n          res.on('data', (chunk) => { data += chunk; });\n          res.on('end', () => resolve(data));\n        });\n        req.on('error', (err) => reject(err));\n        req.end();\n      });\n    }\n    \n    try {\n      // 采集容器日志\n      const logs = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/logs?stdout=true&stderr=true&tail=${tailLines}&timestamps=true);\n    \n      // 获取容器状态\n      const infoRaw = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/json);\n      const info = JSON.parse(infoRaw);\n    \n      // 返回增强后的 payload\n      return [{\n        json: {\n          ...items[0].json,\n          _containerLogs: logs,\n          _containerStatus: info.State.Status,\n          _containerStartedAt: info.State.StartedAt\n        }\n      }];\n    } catch (err) {\n      // 日志采集失败不阻塞告警\n      return [{\n        json: {\n          ...items[0].json,\n          _containerLogs: Log collection failed: ${err.message},\n          _containerLogsError: true\n        }\n      }];\n    }\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

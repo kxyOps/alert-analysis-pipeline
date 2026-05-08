@@ -31,7 +31,18 @@ docker compose exec kb-server python3 /app/kb-server.py
 - Python 3.9+
 - 一个能跑 Hermes Agent 的服务器（可以是同一台机器）
 
-### 第一步：部署 Docker 服务集群
+### 第一步：配置环境变量
+
+```bash
+cd deploy
+
+# 复制环境变量模板并修改
+cp .env.example .env
+vim .env
+# 填入: HERMES_WEBHOOK_URL, WEBHOOK_SECRET, MONITOR_CONTAINER
+```
+
+### 第二步：部署 Docker 服务集群
 
 ```bash
 cd deploy

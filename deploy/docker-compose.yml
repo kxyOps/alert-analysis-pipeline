@@ -46,6 +46,10 @@ services:
       - N8N_METRICS=false
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=168  # 7天
+      # ── 告警链路配置 ──
+      - HERMES_WEBHOOK_URL=${HERMES_WEBHOOK_URL:-http://localhost:8644/webhooks/alert-receiver}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-your-hmac-secret-here}
+      - MONITOR_CONTAINER=${MONITOR_CONTAINER:-doris-standalone}
     volumes:
       - n8n-data:/home/node/.n8n
       - ./n8n/workflows:/home/node/.n8n/workflows:ro
