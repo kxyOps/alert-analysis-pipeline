@@ -1,0 +1,32 @@
+# Prometheus 全局配置
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# 告警规则
+rule_files:
+  - "alerts/*.yml"
+
+# 采集目标
+scrape_configs:
+  # 监控 Prometheus 自身
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # 监控目标服务的端点
+  # 修改 targets 为你的实际监控目标
+  - job_name: "target-services"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets:
+          # - "host.docker.internal:xxxx"  # macOS 宿主机上的服务
+          # - "service1:8080"
+          # - "service2:8080"
+        labels:
+          group: "production"
+
+  # 容器日志采集（通过 cadvisor 指标）
+  - job_name: "docker"
+    static_configs:
+      - targets: ["host.docker.internal:9323"]  # Docker 指标端点

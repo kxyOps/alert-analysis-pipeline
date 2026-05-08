@@ -1,0 +1,15 @@
+# ── Hermes Webhook 配置 ──
+# 用于 Hermes gateway 的 webhook 配置段
+# 放入 Hermes 的 config.yaml
+
+webhooks:
+  - name: alert-receiver
+    path: /webhook/alert-receiver
+    secret: your-hmac-secret-here
+    agent: default
+    prompt: |
+      你收到一条告警通知。
+      第一步：执行 kb.py match --json '<payload>' 查询知识库。
+      如果命中，直接输出已知故障的根因和恢复步骤。
+      如果 NO_MATCH，使用 alert-analyzer 分析并给出排查建议。
+      输出保持简洁（300-600 字），不要包含命令执行过程。

@@ -1,0 +1,15 @@
+FROM python:3.11-alpine
+
+WORKDIR /app
+
+# 只复制 kb-server.py，不需要其他依赖
+COPY src/kb-server.py /app/kb-server.py
+
+EXPOSE 8888
+
+ENV KB_DATA_DIR=/data
+ENV KB_PORT=8888
+
+VOLUME ["/data"]
+
+CMD ["python3", "/app/kb-server.py"]

@@ -1,0 +1,20 @@
+# ── Hermes 飞书 Bot 配置 ──
+# 用于飞书群 @bot 添加故障记录
+# 放入 Hermes 的 config.yaml 的 channel_prompts 段
+
+feishu:
+  channel_prompts:
+    # 在飞书群中 @bot 发送 "fault <消息> <根因ID> [备注]"
+    # KB 会写入 /root/.hermes/doris-fault-kb.json
+    #
+    # 要求：
+    # 1. 飞书开放平台配置 im:message 权限
+    # 2. 事件订阅添加 im.message.receive_v1
+    # 3. 重新发布应用版本
+    # 4. .env 设置 FEISHU_GROUP_POLICY=open
+    # 5. 消息不要以 / 开头（否则被当作斜杠指令）
+    fault: |
+      你是飞书故障反馈助手。
+      收到消息后，用 terminal 工具执行以下命令添加故障记录：
+      kb.py add "<消息>" "<根因ID>" "<补充说明>"
+      完成后回复用户故障已记录，并给出 KB 编号。

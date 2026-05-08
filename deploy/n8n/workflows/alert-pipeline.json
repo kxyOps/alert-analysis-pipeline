@@ -1,0 +1,167 @@
+{
+  "name": "告警接收 → KB 匹配 → 飞书推送",
+  "nodes": [
+    {
+      "id": "webhook-entry",
+      "name": "Webhook 接收",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alert-receiver",
+        "options": {}
+      },
+      "webhookId": "alert-receiver"
+    },
+    {
+      "id": "code-docker-logs",
+      "name": "采集容器日志",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "language": "javascript",
+        "code": "// 通过 Docker API Unix socket 采集日志\n// 不依赖 docker CLI（适用于 n8n Hardened Image）\nconst http = require('http');\n\nconst containerNames = (($json.body || {}).containers || ['target-app']).join('|');\n\nfunction getLogs(container) {\n  return new Promise((resolve, reject) => {\n    const options = {\n      socketPath: '/var/run/docker.sock',\n      path: `/containers/${container}/logs?stdout=true&stderr=true&tail=50`,\n      method: 'GET'\n    };\n    const req = http.request(options, (res) => {\n      let data = '';\n      res.on('data', chunk => data += chunk);\n      res.on('end', () => resolve(data.slice(0, 2000)));\n    });\n    req.on('error', reject);\n    req.end();\n  });\n}\n\nconst results = {};\nfor (const name of containerNames) {\n  try {\n    results[name] = await getLogs(name) || '无日志';\n  } catch (e) {\n    results[name] = `采集失败: ${e.message}`;\n  }\n}\n\nreturn {\n  ...$json,\n  _containerLogs: results\n};"
+      }
+    },
+    {
+      "id": "set-payload",
+      "name": "格式化 Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "payloadStr",
+              "value": "=JSON.stringify($json)"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "crypto-hmac",
+      "name": "HMAC 签名",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "parameters": {
+        "action": "hmac",
+        "encoding": "hex",
+        "algorithm": "sha256",
+        "data": "={{ $json.payloadStr }}",
+        "secretKey": "={{ $env.WEBHOOK_SECRET }}"
+      }
+    },
+    {
+      "id": "http-forward",
+      "name": "转发到 Hermes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.HERMES_WEBHOOK_URL }}",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "bodyParameters": {},
+        "rawContentType": "application/json",
+        "sendQuery": false,
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Signature",
+              "value": "={{ $json.data }}"
+            }
+          ]
+        },
+        "options": {
+          "body": "={{ $json.payloadStr }}"
+        }
+      }
+    },
+    {
+      "id": "webhook-response",
+      "name": "响应",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\":\"ok\",\"forwarded\":true}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook 接收": {
+      "main": [
+        [
+          {
+            "node": "采集容器日志",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "采集容器日志": {
+      "main": [
+        [
+          {
+            "node": "格式化 Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "格式化 Payload": {
+      "main": [
+        [
+          {
+            "node": "HMAC 签名",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC 签名": {
+      "main": [
+        [
+          {
+            "node": "转发到 Hermes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "转发到 Hermes": {
+      "main": [
+        [
+          {
+            "node": "响应",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "template-v1",
+  "triggerCount": 1,
+  "active": false,
+  "tags": []
+}

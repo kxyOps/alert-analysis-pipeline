@@ -1,0 +1,47 @@
+# Grafana 告警规则示例 — 通用告警框架
+# 修改 expr 中的指标名为你实际监控的指标
+apiVersion: 1
+
+groups:
+  - name: service_alerts
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: infra
+        annotations:
+          summary: "服务 {{ $labels.job }} 不可用"
+          description: "{{ $labels.instance }} 已下线超过 1 分钟"
+
+      - alert: HighMemoryUsage
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "内存使用率超过 90%"
+          description: "{{ $labels.instance }} 可用内存不足 10%"
+
+      - alert: DiskFull
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          team: infra
+        annotations:
+          summary: "磁盘空间不足"
+          description: "{{ $labels.instance }} 根分区可用空间不足 10%"
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+          team: infra
+        annotations:
+          summary: "CPU 使用率过高"
+          description: "{{ $labels.instance }} CPU 使用率超过 90%"
