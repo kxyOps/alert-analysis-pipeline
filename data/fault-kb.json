@@ -54,7 +54,7 @@
       "recovery_action": "1) SHOW PROCESSLIST 找到大查询\n2) KILL <query_id> 取消\n3) 调整 mem_limit 参数或拆分导入批次",
       "note": "常用于 Doris BE 场景",
       "created_at": "2026-05-09T00:00:00+08:00",
-      "hit_count": 1,
+      "hit_count": 2,
       "type": "specific",
       "_matched_keywords": [
         "BE",

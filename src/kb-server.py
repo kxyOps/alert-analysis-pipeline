@@ -125,6 +125,7 @@ def _row_to_dict(r):
 def api_list(conn, params):
     q = params.get('q', [''])[0].strip()
     rc = params.get('rc', [''])[0].strip()
+    sym = params.get('sym', [''])[0].strip()
     sort = params.get('sort', ['id'])[0].strip()
     order = 'DESC' if sort.startswith('-') else 'ASC'
     sort = sort.lstrip('-')
@@ -141,6 +142,9 @@ def api_list(conn, params):
     if rc:
         sql += " AND root_cause_id=?"
         args.append(int(rc))
+    if sym:
+        sql += " AND symptom_id=?"
+        args.append(sym)
 
     sql += f" ORDER BY {sort} {order}"
     rows = conn.execute(sql, args).fetchall()

@@ -160,7 +160,7 @@ def _match_all(fields):
     msg_text = text_lower.get('message', '')
     an_text = text_lower.get('alertname', '')
 
-    scored = []  # [(score, priority, entry), ...]
+    scored = []  # [(score, entry), ...]
 
     for e in data['entries']:
         match = e.get('match', {})
@@ -233,6 +233,9 @@ def _build_result(e):
     result = {
         'id': e['id'],
         'title': e.get('title', ''),
+        'symptom': e.get('symptom', ''),
+        'symptom_id': e.get('symptom_id', ''),
+        'type': e.get('type', 'specific'),
         'root_cause': e.get('root_cause', ''),
         'root_cause_id': e.get('root_cause_id', ''),
         'recovery_action': e.get('recovery_action', ''),
@@ -255,8 +258,6 @@ def list_entries():
             current_sym = sym
             print(f"── {sym} ─{'─' * (40 - len(sym))}")
         kws = e.get('keywords', [])
-        priority = e.get('priority', 0)
-        c = e.get('created_at', '')
         print(f"  #{e['id']}  {e.get('title','')[:60]}  [{e.get('type','specific')}]")
         if kws:
             print(f"      关键词: {', '.join(kws[:8])}{'...' if len(kws) > 8 else ''}")
