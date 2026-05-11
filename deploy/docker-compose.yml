@@ -1,9 +1,10 @@
+# 镜像版本固定，避免不同时间部署行为漂移（升级时请查阅各镜像 changelog）。
 version: '3.8'
 
 services:
   # ── Prometheus（监控数据采集） ──
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.53.2
     container_name: alert-prometheus
     restart: unless-stopped
     volumes:
@@ -15,14 +16,15 @@ services:
 
   # ── Grafana（可视化 + 告警规则） ──
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.4.0
     container_name: alert-grafana
     restart: unless-stopped
     depends_on:
       - prometheus
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      # 默认与 deploy/.env.example 中 GF_SECURITY_ADMIN_PASSWORD 一致；生产务必修改
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-changeme}
       - GF_INSTALL_PLUGINS=
     volumes:
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
@@ -35,7 +37,7 @@ services:
 
   # ── n8n（工作流引擎） ──
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:1.74.2
     container_name: alert-n8n
     restart: unless-stopped
     environment:
@@ -49,7 +51,7 @@ services:
       # ── 告警链路配置 ──
       - HERMES_WEBHOOK_URL=${HERMES_WEBHOOK_URL:-http://localhost:8644/webhooks/alert-receiver}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET:-your-hmac-secret-here}
-      - MONITOR_CONTAINER=${MONITOR_CONTAINER:-doris-standalone}
+      - MONITOR_CONTAINER=${MONITOR_CONTAINER:-your-container}
     volumes:
       - n8n-data:/home/node/.n8n
       - ./n8n/workflows:/home/node/.n8n/workflows:ro

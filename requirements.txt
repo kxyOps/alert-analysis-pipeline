@@ -1,0 +1,2 @@
+# Runtime: Python 3.9+ standard library only (no pip packages required).
+# Optional CLI install from repo root: pip install -e .

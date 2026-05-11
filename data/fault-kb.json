@@ -6,8 +6,6 @@
     {
       "id": "001",
       "title": "OOM / 内存超限",
-      "symptom": "内存使用率高",
-      "symptom_id": "mem_high",
       "keywords": [
         "OOM",
         "OutOfMemory",
@@ -17,7 +15,12 @@
         "mem_limit",
         "oom killer"
       ],
+      "type": "specific",
+      "symptom": "内存使用率高",
+      "symptom_id": "mem_high",
       "match": {
+        "alertname": "",
+        "message": "",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "进程被 OOM Killer 终止",
@@ -25,108 +28,11 @@
       "recovery_action": "1) dmesg | grep -i kill 确认 OOM\n2) 调整内存限制参数或扩容\n3) 优化内存使用，减少大查询并发",
       "note": "常伴随 kernel: Out of memory 日志",
       "created_at": "",
-      "hit_count": 0,
-      "type": "specific",
-      "_matched_keywords": [
-        "mem_limit"
-      ],
-      "_score": 0.143
-    },
-    {
-      "id": "006",
-      "title": "BE 大查询内存超限",
-      "symptom": "内存使用率高",
-      "symptom_id": "mem_high",
-      "keywords": [
-        "BE",
-        "大查询",
-        "import",
-        "scan",
-        "mem_limit",
-        "内存超限",
-        "full table scan"
-      ],
-      "match": {
-        "exclude": "resolved|recover|ok|test|fake"
-      },
-      "root_cause": "BE 执行大查询或批量导入时内存超过 mem_limit 限制",
-      "root_cause_id": 6,
-      "recovery_action": "1) SHOW PROCESSLIST 找到大查询\n2) KILL <query_id> 取消\n3) 调整 mem_limit 参数或拆分导入批次",
-      "note": "常用于 Doris BE 场景",
-      "created_at": "2026-05-09T00:00:00+08:00",
-      "hit_count": 2,
-      "type": "specific",
-      "_matched_keywords": [
-        "BE",
-        "大查询",
-        "import",
-        "mem_limit"
-      ],
-      "_score": 0.571
-    },
-    {
-      "id": "007",
-      "title": "系统内存泄漏",
-      "symptom": "内存使用率高",
-      "symptom_id": "mem_high",
-      "keywords": [
-        "内存泄漏",
-        "连接池",
-        "memory leak",
-        "未释放",
-        "持续增长",
-        "gc",
-        "内存使用率"
-      ],
-      "match": {
-        "exclude": "resolved|recover|ok|test|fake"
-      },
-      "root_cause": "应用层连接未释放或 GC 异常导致内存持续泄漏",
-      "root_cause_id": 7,
-      "recovery_action": "1) jmap/jstack dump 分析堆内存\n2) 检查连接池配置和超时设置\n3) 重启服务临时恢复，定位代码问题",
-      "note": "症状类似但根因不同",
-      "created_at": "2026-05-09T00:00:00+08:00",
-      "hit_count": 0,
-      "type": "specific",
-      "_matched_keywords": [
-        "内存使用率"
-      ],
-      "_score": 0.143
-    },
-    {
-      "id": "008",
-      "title": "内存使用率高（通用）",
-      "symptom": "内存使用率高",
-      "symptom_id": "mem_high",
-      "keywords": [
-        "内存",
-        "memory",
-        "使用率",
-        "usage",
-        "占用",
-        "high memory"
-      ],
-      "match": {
-        "exclude": "resolved|recover|ok|test|fake"
-      },
-      "root_cause": "内存使用率超过阈值，需进一步排查具体原因",
-      "root_cause_id": 8,
-      "recovery_action": "1) top 查看内存占用TOP进程\n2) 检查是否有大查询/任务在执行\n3) 检查连接数和内存泄漏迹象\n4) 如持续告警考虑扩容",
-      "note": "通用兜底条目，优先级低于具体根因",
-      "created_at": "2026-05-09T00:00:00+08:00",
-      "hit_count": 1,
-      "type": "catchall",
-      "_matched_keywords": [
-        "内存",
-        "使用率"
-      ],
-      "_score": 0.333
+      "hit_count": 0
     },
     {
       "id": "002",
       "title": "服务端口不可达",
-      "symptom": "服务不可用",
-      "symptom_id": "svc_down",
       "keywords": [
         "Connection refused",
         "端口不可达",
@@ -135,7 +41,12 @@
         "服务不可用",
         "连接超时"
       ],
+      "type": "specific",
+      "symptom": "服务不可用",
+      "symptom_id": "svc_down",
       "match": {
+        "alertname": "",
+        "message": "",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "服务进程可能因元数据异常或网络问题导致端口不可达",
@@ -143,14 +54,11 @@
       "recovery_action": "1) docker logs <container> 检查日志\n2) 确认磁盘空间: df -h\n3) 确认端口监听: ss -tlnp | grep <port>\n4) 重启容器: docker restart <container>",
       "note": "",
       "created_at": "",
-      "hit_count": 0,
-      "type": "specific"
+      "hit_count": 0
     },
     {
       "id": "003",
       "title": "进程宕机 / 心跳超时",
-      "symptom": "服务不可用",
-      "symptom_id": "svc_down",
       "keywords": [
         "heartbeat timeout",
         "心跳超时",
@@ -161,7 +69,12 @@
         "alive=0",
         "not available"
       ],
+      "type": "specific",
+      "symptom": "服务不可用",
+      "symptom_id": "svc_down",
       "match": {
+        "alertname": "",
+        "message": "",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "进程异常退出，可能被 OOM Killer 或磁盘故障触发",
@@ -169,14 +82,11 @@
       "recovery_action": "1) docker logs <container> --tail 200 检查退出原因\n2) dmesg | grep -i kill 检查是否 OOM\n3) docker restart <container>",
       "note": "",
       "created_at": "",
-      "hit_count": 0,
-      "type": "specific"
+      "hit_count": 0
     },
     {
       "id": "004",
       "title": "磁盘空间不足",
-      "symptom": "存储空间不足",
-      "symptom_id": "disk_full",
       "keywords": [
         "disk usage",
         "disk full",
@@ -187,7 +97,12 @@
         "Insufficient disk",
         "容量不足"
       ],
+      "type": "specific",
+      "symptom": "存储空间不足",
+      "symptom_id": "disk_full",
       "match": {
+        "alertname": "",
+        "message": "",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "数据目录磁盘满，需清理或扩容",
@@ -195,14 +110,11 @@
       "recovery_action": "1) df -h 确认各分区使用率\n2) 清理过期数据或日志\n3) 扩容磁盘或增加节点",
       "note": "",
       "created_at": "",
-      "hit_count": 0,
-      "type": "specific"
+      "hit_count": 0
     },
     {
       "id": "005",
       "title": "查询超时 / 慢查询",
-      "symptom": "查询延迟",
-      "symptom_id": "query_slow",
       "keywords": [
         "query timeout",
         "查询超时",
@@ -212,7 +124,12 @@
         "took long",
         "查询执行时间过长"
       ],
+      "type": "specific",
+      "symptom": "查询延迟",
+      "symptom_id": "query_slow",
       "match": {
+        "alertname": "",
+        "message": "",
         "exclude": "resolved|recover|ok|test|fake"
       },
       "root_cause": "大查询或低效 SQL 导致执行超时",
@@ -220,8 +137,112 @@
       "recovery_action": "1) 查看当前进程: ps aux --sort=-%mem | head\n2) 分析慢日志或在应用层诊断\n3) 优化查询或调整超时参数",
       "note": "",
       "created_at": "",
-      "hit_count": 0,
-      "type": "specific"
+      "hit_count": 0
+    },
+    {
+      "id": "006",
+      "title": "大查询 / 批量任务内存超限",
+      "keywords": [
+        "BE",
+        "大查询",
+        "import",
+        "scan",
+        "mem_limit",
+        "内存超限",
+        "full table scan"
+      ],
+      "type": "specific",
+      "symptom": "内存使用率高",
+      "symptom_id": "mem_high",
+      "match": {
+        "alertname": "",
+        "message": "",
+        "exclude": "resolved|recover|ok|test|fake"
+      },
+      "root_cause": "执行大查询或批量导入时内存超过引擎配置的内存上限",
+      "root_cause_id": 6,
+      "recovery_action": "1) 在引擎/数据库控制台查找占用内存的长任务并取消\n2) 调低并发或拆分导入批次\n3) 调整内存上限参数或扩容",
+      "note": "常见于分析型数据库或大数据执行节点",
+      "created_at": "2026-05-09T00:00:00+08:00",
+      "hit_count": 2
+    },
+    {
+      "id": "007",
+      "title": "系统内存泄漏",
+      "keywords": [
+        "内存泄漏",
+        "连接池",
+        "memory leak",
+        "未释放",
+        "持续增长",
+        "gc",
+        "内存使用率"
+      ],
+      "type": "specific",
+      "symptom": "内存使用率高",
+      "symptom_id": "mem_high",
+      "match": {
+        "alertname": "",
+        "message": "",
+        "exclude": "resolved|recover|ok|test|fake"
+      },
+      "root_cause": "应用层连接未释放或 GC 异常导致内存持续泄漏",
+      "root_cause_id": 7,
+      "recovery_action": "1) jmap/jstack dump 分析堆内存\n2) 检查连接池配置和超时设置\n3) 重启服务临时恢复，定位代码问题",
+      "note": "症状类似但根因不同",
+      "created_at": "2026-05-09T00:00:00+08:00",
+      "hit_count": 0
+    },
+    {
+      "id": "008",
+      "title": "内存使用率高（通用）",
+      "keywords": [
+        "内存",
+        "memory",
+        "使用率",
+        "usage",
+        "占用",
+        "high memory"
+      ],
+      "type": "catchall",
+      "symptom": "内存使用率高",
+      "symptom_id": "mem_high",
+      "match": {
+        "alertname": "",
+        "message": "",
+        "exclude": "resolved|recover|ok|test|fake"
+      },
+      "root_cause": "内存使用率超过阈值，需进一步排查具体原因",
+      "root_cause_id": 8,
+      "recovery_action": "1) top 查看内存占用TOP进程\n2) 检查是否有大查询/任务在执行\n3) 检查连接数和内存泄漏迹象\n4) 如持续告警考虑扩容",
+      "note": "通用兜底条目，优先级低于具体根因",
+      "created_at": "2026-05-09T00:00:00+08:00",
+      "hit_count": 1
+    },
+    {
+      "id": "009",
+      "title": "SSH 登录失败",
+      "keywords": [
+        "ssh",
+        "login",
+        "authentication",
+        "connection refused",
+        "port"
+      ],
+      "type": "specific",
+      "symptom": "访问与认证异常",
+      "symptom_id": "access_auth",
+      "match": {
+        "alertname": "",
+        "message": "",
+        "exclude": "resolved|recover|ok|test|fake"
+      },
+      "root_cause": "SSH 端口、密钥、账号或网络策略导致无法建立会话",
+      "root_cause_id": 0,
+      "recovery_action": "1) 确认目标端口与防火墙\n2) 校验密钥/口令与账号权限\n3) 使用 ssh -p <port> 指定非默认端口\n4) 查看服务端 sshd 与安全组日志",
+      "note": "",
+      "created_at": "2026-05-09T07:34:57.639226+08:00",
+      "hit_count": 0
     }
   ]
 }

@@ -1,0 +1,43 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "panels": [
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "content": "## Alert Pipeline — sample dashboard\n\nBundled by **deploy/grafana/dashboards/** provisioning. Add your own `*.json` here or build panels from the default **Prometheus** datasource (`http://prometheus:9090` in Compose).\n\nSee repository **docs/setup.md** for full deployment.",
+        "mode": "markdown"
+      },
+      "title": "Overview",
+      "type": "text"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "alert-pipeline"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "",
+  "title": "Alert Pipeline — Sample",
+  "uid": "alert-pl-sample",
+  "version": 1,
+  "weekStart": ""
+}

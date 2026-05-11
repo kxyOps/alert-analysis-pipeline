@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alert-analysis-pipeline"
+version = "0.1.0"
+description = "通用告警链路：知识库匹配、Web UI、Compose 编排模板"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+
+[project.scripts]
+kb = "alert_analysis_pipeline.entrypoints:main_kb"
+kb-server = "alert_analysis_pipeline.entrypoints:main_kb_server"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["alert_analysis_pipeline*"]

@@ -91,7 +91,7 @@ cron 每周清理过期记录（保留最近 150 条）
 ## 核心设计要点
 
 1. **HMAC 签名验证** — n8n → Hermes 之间使用 HMAC-SHA256 签名，防止伪造请求
-2. **知识库多字段匹配** — alertname + message 双字段正则匹配，支持排除规则（如 resolved/recover）
+2. **知识库匹配** — 排除规则、`alertname` 可选过滤、关键词评分（或仅有 `message` 正则兜底）；详见 README 与 `kb.py` 中 `_match_all`
 3. **零外部依赖** — kb.py 和 kb-server.py 仅使用 Python 标准库
 4. **飞书 @bot 输入** — 通过 channel_prompt 让 agent 执行 kb.py add，用户无需登录服务器
 5. **定期清理** — cron 每周清理旧记录，防止 KB 无限膨胀

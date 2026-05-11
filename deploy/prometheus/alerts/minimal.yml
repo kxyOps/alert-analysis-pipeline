@@ -1,0 +1,4 @@
+# 占位：保证 alerts/*.yml 至少有一个合法文件；可按需改为真实告警规则。
+groups:
+  - name: placeholder
+    rules: []

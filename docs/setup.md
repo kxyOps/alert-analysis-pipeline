@@ -12,7 +12,7 @@ cd deploy
 docker compose up -d
 
 # 3. 验证各服务
-curl http://localhost:3000    # Grafana (admin/admin123)
+curl http://localhost:3000    # Grafana（admin / 密码见 deploy/.env 中 GF_SECURITY_ADMIN_PASSWORD，默认 changeme）
 curl http://localhost:9090    # Prometheus
 curl http://localhost:5678    # n8n
 curl http://localhost:8888    # KB Web UI
@@ -31,6 +31,12 @@ docker compose exec kb-server python3 /app/kb-server.py
 - Python 3.9+
 - 一个能跑 Hermes Agent 的服务器（可以是同一台机器）
 
+### 安全与暴露面（必读）
+
+- **Grafana**：默认口令见 `deploy/.env.example`，上线前务必改为强密码。
+- **KB Web（`kb-server`，Compose 中端口 `8888`）**：**无登录**、**CORS `*`**、监听 **`0.0.0.0`**，仅适合**内网或受控网络**。不要映射到公网；若必须对外，请用反向代理并加认证、TLS、访问控制。
+- **图谱视图**：页面通过 **CDN** 加载 vis-network；无外网时需自行托管静态文件并修改 `src/kb-server.py` 中的资源 URL。
+
 ### 第一步：配置环境变量
 
 ```bash
@@ -39,7 +45,7 @@ cd deploy
 # 复制环境变量模板并修改
 cp .env.example .env
 vim .env
-# 填入: HERMES_WEBHOOK_URL, WEBHOOK_SECRET, MONITOR_CONTAINER
+# 填入: GF_SECURITY_ADMIN_PASSWORD, HERMES_WEBHOOK_URL, WEBHOOK_SECRET, MONITOR_CONTAINER
 ```
 
 ### 第二步：部署 Docker 服务集群
@@ -47,8 +53,9 @@ vim .env
 ```bash
 cd deploy
 
-# 修改 prometheus.yml 中的 targets 为你的实际监控目标
+# 按需修改采集目标（默认仅 scrape Prometheus 自身；示例 job 在文件中以注释形式给出）
 vim prometheus/prometheus.yml
+# 告警规则目录 prometheus/alerts/，当前含占位 minimal.yml，可追加自有规则
 
 # 修改 Grafana 告警规则 (可选)
 vim grafana/alerts/default.yml
@@ -57,7 +64,7 @@ vim grafana/alerts/default.yml
 docker compose up -d
 ```
 
-### 第二步：导入 n8n 工作流
+### 第三步：导入 n8n 工作流
 
 1. 打开 http://localhost:5678
 2. 创建管理员账号
@@ -69,24 +76,26 @@ docker compose up -d
 #   工作流 → Import from File → deploy/n8n/workflows/alert-pipeline.json
 ```
 
-5. 在 n8n 中设置环境变量：
+5. 导入后打开工作流中的 **Crypto** 节点，新建 **HMAC** 凭据，密钥与 Hermes / `WEBHOOK_SECRET` 保持一致（仓库里的 JSON 刻意不包含凭据引用，便于公开分享）。
+
+6. 在 n8n 中设置环境变量：
    - `HERMES_WEBHOOK_URL` — Hermes webhook 接收地址
    - `WEBHOOK_SECRET` — HMAC 签名密钥
 
-### 第三步：配置 Hermes
+### 第四步：配置 Hermes
 
 1. 在 Hermes 服务器的 `config.yaml` 中添加 webhook 配置（参考 `config/hermes-webhook.yaml`）
 2. 在 `.env` 中设置相同的 `WEBHOOK_SECRET`
 3. 重启 Hermes gateway
 
-### 第四步：配置 Grafana 告警
+### 第五步：配置 Grafana 告警
 
-1. 打开 http://localhost:3000 (admin/admin123)
+1. 打开 http://localhost:3000（admin / 密码与 `deploy/.env` 中 `GF_SECURITY_ADMIN_PASSWORD` 一致，模板默认为 changeme）。Dashboard 列表中应有预置的 **Alert Pipeline — Sample**（来自 `deploy/grafana/dashboards/*.json`）；可自行追加导出 JSON 到该目录并重启 Grafana。
 2. 数据源 → Prometheus → URL: http://prometheus:9090
 3. 告警 → 创建告警规则（或使用预置的 `grafana/alerts/default.yml`）
-4. 告警联系点 → 添加 webhook → URL: http://n8n:5678/webhook/alert-receiver
+4. 告警联系点 → 添加 webhook → URL: `http://n8n:5678/webhook/alert-receiver`（须与工作流 `deploy/n8n/workflows/alert-pipeline.json` 里 Webhook 节点的路径 **`alert-receiver`** 一致）
 
-### 第五步：配置飞书 Bot（可选）
+### 第六步：配置飞书 Bot（可选）
 
 1. 飞书开放平台 → 创建应用 → 获取 App ID / App Secret
 2. 权限管理 → 添加 `im:message`
@@ -129,6 +138,10 @@ python3 kb-server.py
 # 或用环境变量指定数据目录
 KB_DATA_DIR=/path/to/data python3 kb.py list
 KB_DATA_DIR=/path/to/data python3 kb-server.py 9999
+
+# 时区（可选）：IANA 名称，或相对 UTC 的小时整数
+# KB_TIMEZONE=Asia/Shanghai python3 kb.py list
+# KB_TZ_OFFSET=8 python3 kb-server.py
 ```
 
 ---

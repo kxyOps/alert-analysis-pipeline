@@ -1,0 +1,28 @@
+# 推送 / PR 时校验知识库 JSON 与 Python 语法（无第三方 pip 依赖）
+name: CI
+
+# 本地默认分支为 master；GitHub 新建仓库多为 main；develop 供 Git Flow 使用。
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:  # 手动在 Actions 页运行
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Python syntax check
+        run: |
+          python3 -m py_compile src/kb.py src/kb-server.py src/kb_tz.py scripts/kb-web-dev.py \
+            src/alert_analysis_pipeline/entrypoints.py src/alert_analysis_pipeline/__init__.py
+
+      - name: Validate fault-kb.json
+        run: cd src && KB_DATA_DIR=../data python3 kb.py validate

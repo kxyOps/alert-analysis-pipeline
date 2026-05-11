@@ -4,7 +4,7 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "/grafana-doris",
+        "path": "alert-receiver",
         "responseMode": "responseNode",
         "options": {}
       },
@@ -104,17 +104,11 @@
         0
       ],
       "id": "936c9fe6-204c-40b7-b55c-c11eb2e01dd2",
-      "name": "Crypto",
-      "credentials": {
-        "crypto": {
-          "id": "zc6cTbz7R0N65ehD",
-          "name": "Crypto account"
-        }
-      }
+      "name": "Crypto"
     },
     {
       "parameters": {
-        "jsCode": "// 容器日志采集 - 通过 Docker API 获取\n    const http = require('http');\n    \n    const containerName = process.env.MONITOR_CONTAINER || 'doris-standalone';\n    const tailLines = 100;\n    \n    // 调 Docker Engine API 取日志\n    function callDocker(socketPath, path) {\n      return new Promise((resolve, reject) => {\n        const options = { socketPath, path, method: 'GET' };\n        const req = http.request(options, (res) => {\n          let data = '';\n          res.on('data', (chunk) => { data += chunk; });\n          res.on('end', () => resolve(data));\n        });\n        req.on('error', (err) => reject(err));\n        req.end();\n      });\n    }\n    \n    try {\n      // 采集容器日志\n      const logs = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/logs?stdout=true&stderr=true&tail=${tailLines}&timestamps=true);\n    \n      // 获取容器状态\n      const infoRaw = await callDocker('/var/run/docker.sock',\n        /containers/${containerName}/json);\n      const info = JSON.parse(infoRaw);\n    \n      // 返回增强后的 payload\n      return [{\n        json: {\n          ...items[0].json,\n          _containerLogs: logs,\n          _containerStatus: info.State.Status,\n          _containerStartedAt: info.State.StartedAt\n        }\n      }];\n    } catch (err) {\n      // 日志采集失败不阻塞告警\n      return [{\n        json: {\n          ...items[0].json,\n          _containerLogs: Log collection failed: ${err.message},\n          _containerLogsError: true\n        }\n      }];\n    }\n"
+        "jsCode": "// 容器日志采集 - 通过 Docker API 获取\nconst http = require('http');\n\nconst containerName = process.env.MONITOR_CONTAINER || 'your-container';\nconst tailLines = 100;\n\nfunction callDocker(socketPath, path) {\n  return new Promise((resolve, reject) => {\n    const options = { socketPath, path, method: 'GET' };\n    const req = http.request(options, (res) => {\n      let data = '';\n      res.on('data', (chunk) => { data += chunk.toString(); });\n      res.on('end', () => resolve(data));\n    });\n    req.on('error', (err) => reject(err));\n    req.end();\n  });\n}\n\ntry {\n  const pathLogs = '/containers/' + containerName + '/logs?stdout=true&stderr=true&tail=' + tailLines + '&timestamps=true';\n  const pathJson = '/containers/' + containerName + '/json';\n  const logs = await callDocker('/var/run/docker.sock', pathLogs);\n  const infoRaw = await callDocker('/var/run/docker.sock', pathJson);\n  const info = JSON.parse(infoRaw);\n\n  return [{\n    json: {\n      ...items[0].json,\n      _containerLogs: logs,\n      _containerStatus: info.State.Status,\n      _containerStartedAt: info.State.StartedAt\n    }\n  }];\n} catch (err) {\n  return [{\n    json: {\n      ...items[0].json,\n      _containerLogs: 'Log collection failed: ' + err.message,\n      _containerLogsError: true\n    }\n  }];\n}\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -191,8 +185,7 @@
   },
   "versionId": "bda35940-966b-4b49-9603-c2a83ecb92ba",
   "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "9670478684a3930306617b540aec352e19e12f5f7745858463aff2267da34c8b"
+    "templateCredsSetupCompleted": false
   },
   "id": "y9V8iJ76MzdcUOaH",
   "tags": []

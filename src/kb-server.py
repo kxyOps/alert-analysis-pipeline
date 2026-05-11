@@ -15,7 +15,9 @@
 """
 
 import json, os, re, sqlite3, sys, time, urllib.parse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+
+from kb_tz import get_kb_timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -24,7 +26,9 @@ DATA_DIR = Path(os.environ.get('KB_DATA_DIR', Path(__file__).parent.parent / 'da
 DB_PATH = DATA_DIR / 'fault-kb.db'
 JSON_PATH = DATA_DIR / 'fault-kb.json'  # 用于迁移
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get('KB_PORT', 8888))
-TZ = timezone(timedelta(hours=8))
+TZ = get_kb_timezone()
+# len('/api/entries/') == 13，勿用 path[14:] 否则会截断 id（如 006→06 → 404）
+API_ENTRIES_PREFIX = '/api/entries/'
 
 # ── 数据库初始化 ─────────────────────────────────────────
 def init_db():
@@ -105,6 +109,49 @@ def migrate_json(conn):
     conn.commit()
     return count > 0
 
+
+def sync_json_from_db(conn):
+    """把 SQLite 全量写回 fault-kb.json，与 kb.py / Hermes 读取路径一致。"""
+    meta = {}
+    if JSON_PATH.exists():
+        try:
+            meta = json.loads(JSON_PATH.read_text(encoding='utf-8'))
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+    rows = conn.execute("SELECT * FROM entries ORDER BY id").fetchall()
+    entries = []
+    for r in rows:
+        d = dict(r)
+        kws = _parse_keywords(d.get('keywords', ''))
+        entries.append({
+            'id': d['id'],
+            'title': d.get('title', ''),
+            'keywords': kws,
+            'type': d.get('entry_type', 'specific'),
+            'symptom': d.get('symptom', ''),
+            'symptom_id': d.get('symptom_id', ''),
+            'match': {
+                'alertname': d.get('alertname_pattern', ''),
+                'message': d.get('message_pattern', ''),
+                'exclude': d.get('exclude_pattern', 'resolved|recover|ok|test|fake'),
+            },
+            'root_cause': d.get('root_cause', ''),
+            'root_cause_id': int(d['root_cause_id']) if d.get('root_cause_id') is not None else 0,
+            'recovery_action': d.get('recovery_action', ''),
+            'note': d.get('note', ''),
+            'created_at': d.get('created_at', ''),
+            'hit_count': int(d['hit_count']) if d.get('hit_count') is not None else 0,
+        })
+    out = {
+        'version': meta.get('version', 4),
+        'max_entries': meta.get('max_entries', 200),
+        'created_at': meta.get('created_at') or datetime.now(TZ).isoformat(),
+        'entries': entries,
+    }
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(str(JSON_PATH), 'w', encoding='utf-8') as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+
 # ── 辅助: 解析 keywords ──────────────────────────────────
 def _parse_keywords(val):
     if not val:
@@ -120,6 +167,9 @@ def _parse_keywords(val):
 def _row_to_dict(r):
     d = dict(r)
     d['keywords'] = _parse_keywords(d.get('keywords', ''))
+    # 前端表格使用 e.type，与 entry_type 对齐
+    if d.get('entry_type') is not None:
+        d['type'] = d['entry_type']
     return d
 
 def api_list(conn, params):
@@ -163,14 +213,17 @@ def api_add(conn, data):
     keywords = data.get('keywords', [])
     conn.execute("""
         INSERT INTO entries
-        (id, title, keywords, entry_type, alertname_pattern, message_pattern, exclude_pattern,
+        (id, title, keywords, entry_type, symptom, symptom_id,
+         alertname_pattern, message_pattern, exclude_pattern,
          root_cause, root_cause_id, recovery_action, note, created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         nid,
         data.get('title', ''),
         json.dumps(keywords, ensure_ascii=False) if keywords else '',
         data.get('type') or data.get('entry_type') or 'specific',
+        data.get('symptom', ''),
+        data.get('symptom_id', ''),
         data.get('alertname_pattern', ''),
         data.get('message_pattern', ''),
         data.get('exclude_pattern', 'resolved|recover|ok|test|fake'),
@@ -182,10 +235,13 @@ def api_add(conn, data):
         now,
     ))
     conn.commit()
+    sync_json_from_db(conn)
     return nid
 
 def api_update(conn, eid, data):
     now = datetime.now(TZ).isoformat()
+    if not conn.execute("SELECT 1 FROM entries WHERE id=?", (eid,)).fetchone():
+        return False
     fields = []
     args = []
     for k in ('title','keywords','entry_type','symptom','symptom_id',
@@ -195,6 +251,8 @@ def api_update(conn, eid, data):
             v = data[k]
             if k == 'keywords' and isinstance(v, list):
                 v = json.dumps(v, ensure_ascii=False)
+            if k == 'root_cause_id':
+                v = int(v) if v not in (None, '') else 0
             fields.append(f"{k}=?")
             args.append(v)
     if not fields:
@@ -204,12 +262,16 @@ def api_update(conn, eid, data):
     args.append(eid)
     conn.execute(f"UPDATE entries SET {', '.join(fields)} WHERE id=?", args)
     conn.commit()
-    return conn.execute("SELECT changes()").fetchone()[0] > 0
+    sync_json_from_db(conn)
+    return True
 
 def api_delete(conn, eid):
     conn.execute("DELETE FROM entries WHERE id=?", (eid,))
     conn.commit()
-    return conn.execute("SELECT changes()").fetchone()[0] > 0
+    deleted = conn.execute("SELECT changes()").fetchone()[0] > 0
+    if deleted:
+        sync_json_from_db(conn)
+    return deleted
 
 def api_stats(conn):
     total = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
@@ -247,6 +309,21 @@ def api_symptoms(conn, params):
             }
         groups[sid]['entries'].append(r)
     return list(groups.values())
+
+
+def api_symptom_options(conn):
+    """筛选下拉 / datalist：按 symptom_id 去重"""
+    rows = conn.execute(
+        """SELECT symptom_id, MAX(symptom) AS symptom FROM entries
+           WHERE COALESCE(TRIM(symptom_id), '') != ''
+           GROUP BY symptom_id ORDER BY symptom_id"""
+    ).fetchall()
+    out = []
+    for r in rows:
+        sid = r['symptom_id']
+        name = (r['symptom'] or sid or '').strip()
+        out.append({'symptom_id': sid, 'symptom': name})
+    return out
 
 
 def api_graph(conn):
@@ -322,10 +399,15 @@ tr:hover{background:#f8f9ff}
 .badge-5{background:#e8f5e9;color:#2a6}
 .tag{display:inline-block;padding:2px 7px;margin:1px 2px;border-radius:4px;font-size:11px;background:#f0f0f0;color:#555;border:1px solid #e0e0e0}
 #graph{width:100%;height:600px;border:1px solid #eee;border-radius:6px}
-.detail-panel{position:fixed;top:0;right:-500px;width:480px;height:100%;background:#fff;box-shadow:-2px 0 20px rgba(0,0,0,.15);transition:right .3s;z-index:100;overflow-y:auto;padding:20px}
+.detail-panel{position:fixed;top:0;right:-500px;width:480px;height:100%;background:#fff;box-shadow:-2px 0 20px rgba(0,0,0,.15);transition:right .3s;z-index:100;overflow-y:auto;padding:20px;box-sizing:border-box}
 .detail-panel.open{right:0}
-.detail-panel h2{font-size:18px;margin-bottom:8px}
-.detail-panel .close{float:right;cursor:pointer;font-size:20px;color:#999}
+.detail-panel .close{position:absolute;top:14px;right:18px;cursor:pointer;font-size:22px;line-height:1;color:#999;z-index:2;padding:4px 6px}
+.detail-panel .close:hover{color:#333}
+#detailContent{padding-right:4px}
+.detail-panel h2.detail-head{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;font-size:18px;margin:0 0 12px 0;padding-right:52px;line-height:1.4}
+.detail-panel h2.detail-head .detail-title{flex:1;min-width:0;word-break:break-word;padding-right:8px}
+.detail-panel h2.detail-head .detail-actions{display:flex;gap:8px;flex-shrink:0;align-items:center;margin-top:2px;margin-right:44px}
+.detail-actions .btn-edit,.detail-actions .btn-delete{margin-left:0}
 .detail-panel .field{margin:8px 0}
 .detail-panel .field label{font-size:12px;color:#888;display:block}
 .detail-panel .field .val{font-size:14px;padding:4px 0}
@@ -350,6 +432,8 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
 .btn-add:hover{background:#3a7bc8}
 .btn-edit{background:#4a90d9;color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;margin-left:10px;vertical-align:middle}
 .btn-edit:hover{background:#3a7bc8}
+.btn-delete{background:#c0392b;color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer;margin-left:8px;vertical-align:middle}
+.btn-delete:hover{background:#a93226}
 </style>
 </head>
 <body>
@@ -359,10 +443,6 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
   <input type="text" id="search" placeholder="搜索标题、根因、关键词..." oninput="loadData()">
   <select id="symFilter" onchange="loadData()">
     <option value="">全部症状</option>
-    <option value="mem_high">内存使用率高</option>
-    <option value="svc_down">服务不可用</option>
-    <option value="disk_full">存储空间不足</option>
-    <option value="query_slow">查询延迟</option>
   </select>
   <select id="sort" onchange="loadData()">
     <option value="id">编号排序</option>
@@ -391,6 +471,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
   </table>
 </div>
 <div class="panel" id="panel-graph">
+  <p style="font-size:12px;color:#888;margin-bottom:8px;line-height:1.5">图谱依赖 CDN（vis-network）；无外网时请改用本地或内网镜像静态文件，详见 README。</p>
   <div id="graph"></div>
 </div>
 </div>
@@ -403,12 +484,7 @@ pre{background:#f5f5f5;padding:8px;border-radius:4px;font-size:12px;overflow-x:a
     <h3 id="modalTitle">新增条目</h3>
     <label>症状分类</label>
     <input list="symptom_list" id="f_symptom_id" placeholder="选择已有或输入新分类">
-    <datalist id="symptom_list">
-      <option value="mem_high">内存使用率高</option>
-      <option value="svc_down">服务不可用</option>
-      <option value="disk_full">存储空间不足</option>
-      <option value="query_slow">查询延迟</option>
-    </datalist>
+    <datalist id="symptom_list"></datalist>
     <label>类型</label>
     <select id="f_entry_type">
       <option value="specific">specific</option>
@@ -450,6 +526,34 @@ function switchTab(name) {
   if (name === 'graph') loadGraph();
 }
 
+function refreshSymptomOptions(done) {
+  fetch('/api/symptom-options').then(function(r){ return r.json(); }).then(function(opts){
+    var sel = document.getElementById('symFilter');
+    var prev = sel.value;
+    sel.innerHTML = '<option value="">全部症状</option>';
+    opts.forEach(function(o){
+      var op = document.createElement('option');
+      op.value = o.symptom_id;
+      op.textContent = o.symptom || o.symptom_id;
+      sel.appendChild(op);
+    });
+    var ok = false;
+    for (var i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === prev) { ok = true; break; }
+    }
+    if (ok) sel.value = prev;
+    var dl = document.getElementById('symptom_list');
+    dl.innerHTML = '';
+    opts.forEach(function(o){
+      var opt = document.createElement('option');
+      opt.value = o.symptom_id;
+      opt.textContent = o.symptom || o.symptom_id;
+      dl.appendChild(opt);
+    });
+    if (done) done();
+  });
+}
+
 function loadData() {
   var q = document.getElementById('search').value;
   var sym = document.getElementById('symFilter').value;
@@ -477,21 +581,18 @@ function renderTable() {
       var tr = document.createElement('tr');
       tr.style.cursor = 'pointer';
       tr.onclick = function(){ showDetail(e.id); };
-      // 症状合并单元格
+      var rcRaw = e.root_cause != null ? String(e.root_cause) : '';
+      var rcLabel = rcRaw ? rcRaw.slice(0, 35) : '—';
+      var typeHtml = (e.type === 'catchall' ? '<span style="color:#999">catchall</span>' : '<span style="color:#2a6">specific</span>');
+      var rowHtml = '';
       if (i === 0) {
-        var symTd = document.createElement('td');
-        symTd.setAttribute('rowspan', rowspan);
-        symTd.style.background = '#f8f9ff';
-        symTd.style.fontWeight = '600';
-        symTd.style.width = '120px';
-        symTd.textContent = g.symptom;
-        tr.appendChild(symTd);
+        rowHtml += '<td rowspan="'+rowspan+'" style="background:#f8f9ff;font-weight:600;width:120px">'+esc(g.symptom)+'</td>';
       }
-      var rcLabel = e.root_cause ? e.root_cause.slice(0, 35) : '—';
-      tr.innerHTML += '<td><b>#'+e.id+'</b></td>' +
+      rowHtml += '<td><b>#'+esc(e.id)+'</b></td>' +
         '<td><b>'+esc(e.title)+'</b><br/><span style="color:#888;font-size:11px">'+esc(rcLabel)+'</span></td>' +
-        '<td>'+(e.type === 'catchall' ? '<span style="color:#999">catchall</span>' : '<span style="color:#2a6">specific</span>')+'</td>' +
-        '<td>'+e.hit_count+'</td>';
+        '<td>'+typeHtml+'</td>' +
+        '<td>'+esc(String(e.hit_count != null ? e.hit_count : 0))+'</td>';
+      tr.innerHTML = rowHtml;
       tbody.appendChild(tr);
     });
   });
@@ -499,27 +600,67 @@ function renderTable() {
 }
 
 function showDetail(id) {
-  fetch('/api/entries/'+id).then(r=>r.json()).then(e => {
-    var panel = document.getElementById('detail');
-    var kws = (e.keywords||[]).map(function(k){ return '<span class="tag">'+esc(k)+'</span>'; }).join('');
-    panel.querySelector('#detailContent').innerHTML =
-      '<h2>#'+e.id+' '+esc(e.title)+'<button class="btn-edit" onclick="openEditModal(\''+e.id+'\')">编辑</button></h2>' +
+  var panel = document.getElementById('detail');
+  var box = document.getElementById('detailContent');
+  if (!panel || !box) return;
+  var sid = encodeURIComponent(id);
+  fetch('/api/entries/'+sid).then(function(r){
+    return r.json().then(function(e){ return { ok: r.ok, status: r.status, e: e }; });
+  }).then(function(res){
+    if (!res.ok || res.e.error) {
+      box.innerHTML = '<p style="color:#c00;padding:12px">加载失败（HTTP '+res.status+'）: '+esc(res.e.error || 'not found')+'</p>';
+      panel.classList.add('open');
+      return;
+    }
+    var e = res.e;
+    var kwArr = Array.isArray(e.keywords) ? e.keywords : [];
+    var kws = kwArr.map(function(k){ return '<span class="tag">'+esc(k)+'</span>'; }).join('');
+    var safeId = String(e.id != null ? e.id : '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    box.innerHTML =
+      '<h2 class="detail-head"><span class="detail-title">#'+esc(e.id)+' '+esc(e.title)+'</span>' +
+      '<span class="detail-actions">' +
+      '<button type="button" class="btn-edit" onclick="openEditModal(\''+safeId+'\')">编辑</button>' +
+      '<button type="button" class="btn-delete" onclick="deleteEntry(\''+safeId+'\')">删除</button></span></h2>' +
       '<div class="field"><label>症状分类</label><div class="val"><b>'+esc(e.symptom||'—')+'</b></div></div>' +
-      '<div class="field"><label>类型</label><div class="val"><b>'+(e.type||'specific')+'</b></div></div>' +
-      '<div class="field"><label>根因</label><div class="val">'+esc(e.root_cause||'')+'</div></div>' +
+      '<div class="field"><label>类型</label><div class="val"><b>'+esc(e.type||e.entry_type||'specific')+'</b></div></div>' +
+      '<div class="field"><label>根因</label><div class="val">'+esc(e.root_cause!=null?e.root_cause:'')+'</div></div>' +
       '<div class="field"><label>关键词</label><div class="val">'+(kws||'<span style="color:#999">未设置</span>')+'</div></div>' +
       '<div class="field"><label>恢复步骤</label><div class="val"><pre>'+esc(e.recovery_action||'无')+'</pre></div></div>' +
       '<div class="field"><label>匹配 alertname</label><div class="val">'+esc(e.alertname_pattern||'—')+'</div></div>' +
       '<div class="field"><label>匹配 message</label><div class="val">'+esc(e.message_pattern||'—')+'</div></div>' +
       '<div class="field"><label>排除规则</label><div class="val">'+esc(e.exclude_pattern||'—')+'</div></div>' +
       '<div class="field"><label>备注</label><div class="val">'+esc(e.note||'—')+'</div></div>' +
-      '<div class="field"><label>命中 '+e.hit_count+' 次 | 创建 '+ (e.created_at||'?') +'</label></div>';
+      '<div class="field"><label>命中 '+esc(String(e.hit_count!=null?e.hit_count:0))+' 次 | 创建 '+esc(e.created_at||'?')+'</label></div>';
+    panel.classList.add('open');
+  }).catch(function(err){
+    box.innerHTML = '<p style="color:#c00;padding:12px">加载异常: '+esc(err && err.message ? err.message : String(err))+'</p>';
     panel.classList.add('open');
   });
 }
 
 function closeDetail() {
   document.getElementById('detail').classList.remove('open');
+}
+
+function deleteEntry(id) {
+  if (!id) return;
+  if (!confirm('确定删除条目 #' + id + '？删除后将同步更新 fault-kb.json，且不可撤销。')) return;
+  var sid = encodeURIComponent(id);
+  fetch('/api/entries/' + sid, { method: 'DELETE' })
+    .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, status: r.status, j: j }; }); })
+    .then(function(res){
+      if (!res.ok || res.j.error) {
+        alert('删除失败（HTTP ' + res.status + '）: ' + (res.j.error || 'unknown'));
+        return;
+      }
+      closeDetail();
+      refreshSymptomOptions(function(){
+        loadData();
+        var gp = document.getElementById('panel-graph');
+        if (gp && gp.classList.contains('active')) loadGraph();
+      });
+    })
+    .catch(function(err){ alert('删除异常: ' + (err && err.message ? err.message : String(err))); });
 }
 
 function loadGraph() {
@@ -653,15 +794,23 @@ function submitForm() {
     method = 'POST';
   }
   fetch(url, {method: method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
-    .then(function(r){ return r.json(); })
+    .then(function(r){
+      return r.json().then(function(j){
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    })
     .then(function() {
       closeModal();
       closeDetail();
-      loadData();
+      refreshSymptomOptions(loadData);
+    })
+    .catch(function(err) {
+      alert('保存失败: ' + (err && err.message ? err.message : err));
     });
 }
 
-loadData();
+refreshSymptomOptions(loadData);
 </script>
 </body>
 </html>"""
@@ -680,8 +829,8 @@ class KBHandler(BaseHTTPRequestHandler):
                 self.send_html(200, HTML)
             elif path == '/api/entries':
                 self.send_json(api_list(self.conn, params))
-            elif path.startswith('/api/entries/') and len(path) > 14:
-                eid = path[14:]
+            elif path.startswith(API_ENTRIES_PREFIX) and len(path) > len(API_ENTRIES_PREFIX):
+                eid = urllib.parse.unquote(path[len(API_ENTRIES_PREFIX):])
                 e = api_get(self.conn, eid)
                 if e:
                     self.send_json(e)
@@ -691,6 +840,8 @@ class KBHandler(BaseHTTPRequestHandler):
                 self.send_json(api_stats(self.conn))
             elif path == '/api/symptoms':
                 self.send_json(api_symptoms(self.conn, params))
+            elif path == '/api/symptom-options':
+                self.send_json(api_symptom_options(self.conn))
             elif path == '/api/graph':
                 self.send_json(api_graph(self.conn))
             else:
@@ -717,10 +868,16 @@ class KBHandler(BaseHTTPRequestHandler):
             self.send_json({'error':str(e)}, 500)
 
     def do_PUT(self):
-        if self.path.startswith('/api/entries/') and len(self.path) > 14:
-            eid = self.path[14:]
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith(API_ENTRIES_PREFIX) and len(path) > len(API_ENTRIES_PREFIX):
+            eid = urllib.parse.unquote(path[len(API_ENTRIES_PREFIX):])
             length = int(self.headers.get('Content-Length', 0))
-            data = json.loads(self.rfile.read(length)) if length else {}
+            raw = self.rfile.read(length) if length else b'{}'
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                self.send_json({'error': 'invalid json'}, 400)
+                return
             if api_update(self.conn, eid, data):
                 e = api_get(self.conn, eid)
                 self.send_json(e)
@@ -730,8 +887,9 @@ class KBHandler(BaseHTTPRequestHandler):
             self.send_json({'error':'not found'}, 404)
 
     def do_DELETE(self):
-        if self.path.startswith('/api/entries/') and len(self.path) > 14:
-            eid = self.path[14:]
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith(API_ENTRIES_PREFIX) and len(path) > len(API_ENTRIES_PREFIX):
+            eid = urllib.parse.unquote(path[len(API_ENTRIES_PREFIX):])
             if api_delete(self.conn, eid):
                 self.send_json({'deleted': eid})
             else:

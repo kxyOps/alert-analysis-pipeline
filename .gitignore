@@ -12,9 +12,16 @@ build/
 *.db-shm
 *.db-wal
 
-# Environment
+# Environment（保留 *.example 供仓库提交）
 .env
+.env.*
+!.env.example
+!**/.env.example
 *.env.local
+
+# Virtualenv
+.venv/
+venv/
 
 # IDE
 .vscode/

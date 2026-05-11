@@ -1,9 +1,12 @@
 FROM python:3.11-alpine
 
+# ZoneInfo 需要系统时区数据库（KB_TIMEZONE / TZ 用 IANA 名称时）
+RUN apk add --no-cache tzdata
+
 WORKDIR /app
 
-# 只复制 kb-server.py，不需要其他依赖
-COPY src/kb-server.py /app/kb-server.py
+# 仅 stdlib；kb_tz 为默认时区解析（见 README / KB_TIMEZONE）
+COPY src/kb-server.py src/kb_tz.py /app/
 
 EXPOSE 8888
 

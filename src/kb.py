@@ -13,6 +13,7 @@
   kb.py match <消息>                      # 纯文本匹配
   kb.py match --json '<JSON>'             # 告警 payload 匹配
   kb.py cleanup                           # 清理超量记录
+  kb.py validate                          # 检查条目结构与重复 id
 
 环境变量:
   KB_DATA_DIR    数据目录（默认: ./data）
@@ -20,13 +21,15 @@
 """
 
 import json, os, sys, re, time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+
+from kb_tz import get_kb_timezone
 
 DATA_DIR = os.environ.get('KB_DATA_DIR', os.path.join(os.path.dirname(__file__), '..', 'data'))
 KB_PATH = os.path.join(DATA_DIR, 'fault-kb.json')
 MAX_ENTRIES = int(os.environ.get('KB_MAX_ENTRIES', 200))
 CLEANUP_RETAIN = int(os.environ.get('KB_CLEANUP_RETAIN', 150))
-TZ = timezone(timedelta(hours=8))
+TZ = get_kb_timezone()
 
 
 def ensure_data():
@@ -48,7 +51,16 @@ def load():
         return json.load(f)
 
 
+def _strip_entry_runtime_fields(entries):
+    """匹配过程产生的临时字段不应写入磁盘，避免污染 JSON / Git diff。"""
+    for e in entries:
+        for k in list(e.keys()):
+            if k.startswith('_'):
+                del e[k]
+
+
 def save(data):
+    _strip_entry_runtime_fields(data.get('entries', []))
     with open(KB_PATH, 'w') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -173,8 +185,8 @@ def _match_all(fields):
         if not match:
             old_pattern = e.get('alert_pattern', '')
             if old_pattern and msg_text and re.search(old_pattern, msg_text, re.IGNORECASE):
-                scored.append((1.0, e))
-            continue
+                scored.append((1.0, e, None))
+                continue
 
         # ── 排除规则（词边界匹配） ──
         exclude_pat = match.get('exclude', '')
@@ -203,16 +215,14 @@ def _match_all(fields):
             matched_kws = [kw for kw in keywords if kw.lower() in msg_text]
             if matched_kws:
                 score = len(matched_kws) / len(keywords)
-                e['_matched_keywords'] = matched_kws
-                e['_score'] = round(score, 3)
-                scored.append((score, e))
+                scored.append((score, e, matched_kws))
                 continue
 
         # ── 无关键词 → 用 message 正则保底 ──
         msg_pat = match.get('message', '')
         if not keywords and msg_pat and msg_text:
             if re.search(msg_pat, msg_text, re.IGNORECASE):
-                scored.append((0.5, e))
+                scored.append((0.5, e, None))
                 continue
 
     if not scored:
@@ -224,16 +234,16 @@ def _match_all(fields):
         0 if x[1].get('type', 'specific') == 'specific' else 1,
         x[1].get('id', '')
     ))
-    best = scored[0][1]
+    win_score, best, matched_kws = scored[0]
 
-    # 更新命中次数
+    # 更新命中次数（不向条目写入 _score / _matched_keywords，避免 save 污染数据文件）
     best['hit_count'] = best.get('hit_count', 0) + 1
     save(data)
 
-    return _build_result(best)
+    return _build_result(best, score=round(win_score, 3), matched_keywords=matched_kws)
 
 
-def _build_result(e):
+def _build_result(e, score=None, matched_keywords=None):
     result = {
         'id': e['id'],
         'title': e.get('title', ''),
@@ -245,11 +255,10 @@ def _build_result(e):
         'recovery_action': e.get('recovery_action', ''),
         'note': e.get('note', ''),
     }
-    # 如果有关键词匹配信息，附加到结果
-    if '_score' in e:
-        result['_score'] = e['_score']
-    if '_matched_keywords' in e:
-        result['_matched_keywords'] = e['_matched_keywords']
+    if score is not None:
+        result['_score'] = score
+    if matched_keywords:
+        result['_matched_keywords'] = matched_keywords
     return result
 
 
@@ -288,7 +297,7 @@ def delete(entry_id):
     print(f"已删除 #{entry_id}")
 
 
-def edit(entry_id, **fields):
+def edit(entry_id, match_updates=None, **fields):
     data = load()
     entry = find_entry(data, entry_id)
     if not entry:
@@ -297,6 +306,8 @@ def edit(entry_id, **fields):
     for k, v in fields.items():
         if v is not None:
             entry[k] = v
+    if match_updates:
+        entry.setdefault('match', {}).update(match_updates)
     save(data)
     print(f"已更新 #{entry_id}")
 
@@ -315,6 +326,53 @@ def cleanup():
     print(f"清理了 {len(to_remove)} 条旧记录，剩余 {len(to_keep)} 条")
 
 
+def validate():
+    """结构自检：便于 CI / 发布前检查 JSON 是否可被加载。"""
+    data = load()
+    errs = []
+    ids_seen = set()
+    required_root = ('id', 'root_cause_id')
+    for i, e in enumerate(data.get('entries', [])):
+        prefix = f"entries[{i}]"
+        for fld in required_root:
+            if fld not in e:
+                errs.append(f"{prefix}: 缺少字段 {fld}")
+        eid = e.get('id')
+        if eid is not None:
+            if eid in ids_seen:
+                errs.append(f"重复 id: {eid}")
+            ids_seen.add(eid)
+        m = e.get('match') or {}
+        an = m.get('alertname')
+        if an:
+            try:
+                re.compile(an, re.IGNORECASE)
+            except re.error as ex:
+                errs.append(f"{prefix} match.alertname: {ex}")
+        msg_pat = m.get('message')
+        if msg_pat:
+            try:
+                re.compile(msg_pat, re.IGNORECASE)
+            except re.error as ex:
+                errs.append(f"{prefix} match.message: {ex}")
+        excl = m.get('exclude')
+        if excl:
+            for part in str(excl).split('|'):
+                p = part.strip()
+                if not p:
+                    continue
+                try:
+                    re.compile(r'\b' + p + r'\b', re.IGNORECASE)
+                except re.error as ex:
+                    errs.append(f"{prefix} match.exclude ({p!r}): {ex}")
+    if errs:
+        print('验证失败:')
+        for x in errs:
+            print(' ', x)
+        sys.exit(1)
+    print(f'[KB] 验证通过: {len(data.get("entries", []))} 条记录')
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("用法: kb.py <list|add|delete|edit|match|cleanup> [...]")
@@ -330,10 +388,11 @@ if __name__ == '__main__':
             print("  add <消息> <根因ID> [备注]   新增记录（自动提取关键词）")
             print("       [--symptom S] [--symptom-id SID] [--type specific|catchall]")
             print("  delete <id>                  删除条目")
-            print("  edit <id> [字段...]           修改条目字段")
+            print("  edit <id> [字段...]           修改条目字段（含 --match-alertname / --match-message / --match-exclude）")
             print("  match <消息>                 纯文本匹配")
             print("  match --json '<JSON>'         告警 payload 匹配")
             print("  cleanup                      清理超量记录")
+            print("  validate                     校验 JSON 结构与正则字段")
             sys.exit(0)
         list_entries()
 
@@ -369,10 +428,12 @@ if __name__ == '__main__':
     elif cmd == 'edit':
         if len(sys.argv) < 3:
             print("用法: kb.py edit <id> [--title T] [--symptom S] [--symptom-id SID] [--root-cause RC] [--keywords K1,K2] [--type specific|catchall]")
+            print("          [--match-alertname R] [--match-message R] [--match-exclude R]")
             sys.exit(1)
         entry_id = sys.argv[2]
         args = sys.argv[3:]
         fields = {}
+        match_updates = {}
         i = 0
         while i < len(args):
             if args[i] == '--title' and i + 1 < len(args):
@@ -387,11 +448,17 @@ if __name__ == '__main__':
                 fields['keywords'] = [k.strip() for k in args[i + 1].split(',') if k.strip()]; i += 2
             elif args[i] == '--type' and i + 1 < len(args):
                 fields['type'] = args[i + 1]; i += 2
+            elif args[i] == '--match-alertname' and i + 1 < len(args):
+                match_updates['alertname'] = args[i + 1]; i += 2
+            elif args[i] == '--match-message' and i + 1 < len(args):
+                match_updates['message'] = args[i + 1]; i += 2
+            elif args[i] == '--match-exclude' and i + 1 < len(args):
+                match_updates['exclude'] = args[i + 1]; i += 2
             else:
                 print(f"未知参数: {args[i]}"); sys.exit(1)
-        if not fields:
+        if not fields and not match_updates:
             print("至少指定一个要修改的字段"); sys.exit(1)
-        edit(entry_id, **fields)
+        edit(entry_id, match_updates=match_updates or None, **fields)
 
     elif cmd == 'match':
         if len(sys.argv) < 3:
@@ -408,6 +475,9 @@ if __name__ == '__main__':
 
     elif cmd == 'cleanup':
         cleanup()
+
+    elif cmd == 'validate':
+        validate()
 
     else:
         print(f"未知命令: {cmd}")
