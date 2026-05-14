@@ -58,7 +58,7 @@ python3 kb-server.py
 
 **本地安装 CLI（可选）：** 在项目根目录执行 `pip install -e .`，可在任意路径使用命令 **`kb`** / **`kb-server`**（依赖可编辑安装，详见 `pyproject.toml`）。
 
-**数据说明：** `kb.py` / 告警链路默认读 **`data/fault-kb.json`**。KB Web UI 在同一目录使用 **SQLite（`fault-kb.db`）**，在界面增删改后会 **同步写回 JSON**，便于 CLI 与 Git 一致。请勿提交本地数据库或含密钥的 `.env`（仓库已 `.gitignore`）。本地改 UI 可用开发热重启：`python3 scripts/kb-web-dev.py`。
+**数据说明：** `kb.py` / 告警链路默认读 **`data/fault-kb.json`**。KB Web UI 在同一目录使用 **SQLite（`fault-kb.db`）**，在界面增删改后会 **同步写回 JSON**，便于 CLI 与 Git 一致。
 
 ## 工作流
 
